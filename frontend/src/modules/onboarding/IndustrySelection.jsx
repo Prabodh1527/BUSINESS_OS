@@ -87,7 +87,7 @@ selectedIndustry
 
 
 
-navigate("/onboarding/services");
+navigate("/onboarding/complete");
 
 
 };

@@ -13,7 +13,6 @@ import ResetPassword from "@/modules/auth/ResetPassword";
 import Welcome from "@/modules/onboarding/Welcome";
 import BusinessInfo from "@/modules/onboarding/BusinessInfo";
 import IndustrySelection from "@/modules/onboarding/IndustrySelection";
-import ServicesSetup from "@/modules/onboarding/ServicesSetup";
 import Complete from "@/modules/onboarding/Complete";
 
 // Dashboard
@@ -115,8 +114,6 @@ export default function AppRoutes() {
       <Route path="/onboarding/business" element={<BusinessInfo/>}/>
 
       <Route path="/onboarding/industry" element={<IndustrySelection/>}/>
-
-      <Route path="/onboarding/services" element={<ServicesSetup/>}/>
 
       <Route path="/onboarding/complete" element={<Complete/>}/>
 
