@@ -11,10 +11,9 @@ import ResetPassword from "@/modules/auth/ResetPassword";
 
 // Onboarding
 import Welcome from "@/modules/onboarding/Welcome";
-import BusinessSetup from "@/modules/onboarding/BusinessSetup";
+import BusinessInfo from "@/modules/onboarding/BusinessInfo";
 import IndustrySelection from "@/modules/onboarding/IndustrySelection";
 import ServicesSetup from "@/modules/onboarding/ServicesSetup";
-import EmployeeSetup from "@/modules/onboarding/EmployeeSetup";
 import Complete from "@/modules/onboarding/Complete";
 
 // Dashboard
@@ -97,6 +96,7 @@ import Notifications from "@/modules/notifications/Notifications";
 import Files from "@/modules/files/Files";
 import ProtectedRoute from "./ProtectedRoute";
 
+
 function RootRedirect() {
   const { user } = useAuth();
   return <Navigate to={user?.role === "EMPLOYEE" ? "/employee/dashboard" : "/dashboard"} replace />;
@@ -110,12 +110,15 @@ export default function AppRoutes() {
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
 
-      <Route path="/onboarding" element={<Welcome />} />
-      <Route path="/onboarding/business" element={<BusinessSetup />} />
-      <Route path="/onboarding/industry" element={<IndustrySelection />} />
-      <Route path="/onboarding/services" element={<ServicesSetup />} />
-      <Route path="/onboarding/employees" element={<EmployeeSetup />} />
-      <Route path="/onboarding/complete" element={<Complete />} />
+      <Route path="/onboarding" element={<Welcome/>}/>
+
+      <Route path="/onboarding/business" element={<BusinessInfo/>}/>
+
+      <Route path="/onboarding/industry" element={<IndustrySelection/>}/>
+
+      <Route path="/onboarding/services" element={<ServicesSetup/>}/>
+
+      <Route path="/onboarding/complete" element={<Complete/>}/>
 
       <Route element={<ProtectedRoute allowedRoles={["OWNER"]}><DashboardLayout /></ProtectedRoute>}>
         <Route path="/" element={<RootRedirect />} />
@@ -175,6 +178,8 @@ export default function AppRoutes() {
 
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/files" element={<Files />} />
+
+        
       </Route>
 
       <Route element={<ProtectedRoute allowedRoles={["EMPLOYEE"]}><DashboardLayout /></ProtectedRoute>}>
