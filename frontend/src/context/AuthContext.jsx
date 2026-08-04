@@ -1,5 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { clearAuthStorage, completeOnboardingForUser, getStoredUser, signInWithCredentials, signUpWithRole } from "@/services/authService";
+import {
+  clearAuthStorage,
+  completeOnboardingForUser,
+  getStoredUser,
+  signInWithCredentials,
+  signUpWithRole,
+} from "@/services/authService";
 
 const AuthContext = createContext(null);
 
@@ -24,22 +30,22 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const signIn = ({ email, password }) => {
-    const result = signInWithCredentials(email, password);
+  const signIn = async ({ email, password }) => {
+    const result = await signInWithCredentials(email, password);
     if (!result.success) {
       return result;
     }
     persistUser(result.user);
-    return { success: true, message: result.message };
+    return { success: true, user: result.user, message: result.message };
   };
 
-  const signUp = ({ name, email, password, role = "OWNER" }) => {
-    const result = signUpWithRole(name, email, password, role);
+  const signUp = async ({ name, email, password, role = "OWNER" }) => {
+    const result = await signUpWithRole(name, email, password, role);
     if (!result.success) {
       return result;
     }
     persistUser(result.user);
-    return { success: true, message: result.message };
+    return { success: true, user: result.user, message: result.message };
   };
 
   const signOut = () => {
