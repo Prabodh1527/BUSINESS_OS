@@ -8,7 +8,7 @@ const userSchema = new mongoose.Schema(
       required: [true, 'Name is required'],
     },
     email: {
-      type: String, 
+      type: String,
       required: [true, 'Email is required'],
       unique: true,
       lowercase: true,
@@ -20,14 +20,14 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['admin', 'manager', 'employee', 'customer'],
-      default: 'admin',
+      enum: ['OWNER', 'MANAGER', 'RECEPTIONIST', 'EMPLOYEE', 'ADMIN', 'CUSTOMER', 'admin', 'manager', 'employee', 'customer'],
+      default: 'OWNER',
     },
   },
   { timestamps: true }
 );
 
-// Hash password before saving to database (updated for modern Mongoose)
+// Hash password before saving to database
 userSchema.pre('save', async function () {
   if (!this.isModified('password')) return;
   const salt = await bcrypt.genSalt(10);

@@ -1,3 +1,4 @@
+
 import User from '../models/User.js';
 import jwt from 'jsonwebtoken';
 
@@ -14,6 +15,10 @@ export const registerUser = async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
 
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: 'Please fill in all required fields' });
+    }
+
     const userExists = await User.findOne({ email });
     if (userExists) {
       return res.status(400).json({ message: 'User already exists' });
@@ -23,7 +28,7 @@ export const registerUser = async (req, res) => {
       name,
       email,
       password,
-      role: role || 'admin',
+      role: role ? role.toUpperCase() : 'OWNER',
     });
 
     if (user) {
@@ -38,8 +43,9 @@ export const registerUser = async (req, res) => {
       res.status(400).json({ message: 'Invalid user data' });
     }
   } catch (error) {
+    console.error('Registration Error:', error);
     res.status(500).json({ message: error.message });
-  } 
+  }
 };
 
 // @desc    Auth user & get token (Login)
@@ -62,6 +68,7 @@ export const loginUser = async (req, res) => {
       res.status(401).json({ message: 'Invalid email or password' });
     }
   } catch (error) {
+    console.error('Login Error:', error);
     res.status(500).json({ message: error.message });
   }
 };

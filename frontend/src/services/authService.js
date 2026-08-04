@@ -1,5 +1,8 @@
+
 export const AUTH_STORAGE_KEY = "business-os-auth";
 export const ONBOARDING_STORAGE_KEY = "business-os-onboarding";
+
+const API_URL = "http://localhost:5000/api/auth";
 
 export const demoAccounts = {
   OWNER: {
@@ -60,8 +63,32 @@ export function clearAuthStorage() {
   sessionStorage.clear();
 }
 
-export function signInWithCredentials(email, password) {
+export async function signInWithCredentials(email, password) {
   const normalizedEmail = email.trim().toLowerCase();
+
+  // Try backend first
+  try {
+    const response = await fetch(`${API_URL}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: normalizedEmail, password }),
+    });
+
+    const data = await response.json();
+
+    if (response.ok) {
+      const nextUser = {
+        ...data,
+        onboardingCompleted: Boolean(localStorage.getItem(ONBOARDING_STORAGE_KEY)),
+      };
+      persistUser(nextUser);
+      return { success: true, user: nextUser, message: "Signed in successfully." };
+    }
+  } catch (error) {
+    console.warn("Backend unavailable, checking demo accounts...", error);
+  }
+
+  // Fallback to Demo Accounts
   const account = Object.values(demoAccounts).find(
     (entry) => entry.email === normalizedEmail && entry.password === password
   );
@@ -79,19 +106,33 @@ export function signInWithCredentials(email, password) {
   return { success: true, user: nextUser, message: "Signed in successfully." };
 }
 
-export function signUpWithRole(name, email, password, role = "OWNER") {
+export async function signUpWithRole(name, email, password, role = "OWNER") {
   const normalizedEmail = email.trim().toLowerCase();
-  const nextUser = {
-    id: `${role.toLowerCase()}-${Date.now()}`,
-    name: name.trim(),
-    email: normalizedEmail,
-    role,
-    company: "New Business",
-    onboardingCompleted: false,
-  };
 
-  persistUser(nextUser);
-  return { success: true, user: nextUser, message: "Account created." };
+  try {
+    const response = await fetch(`${API_URL}/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim(), email: normalizedEmail, password, role }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return { success: false, message: data.message || "Registration failed." };
+    }
+
+    const nextUser = {
+      ...data,
+      onboardingCompleted: false,
+    };
+
+    persistUser(nextUser);
+    return { success: true, user: nextUser, message: "Account created successfully." };
+  } catch (error) {
+    console.error("Failed to reach server:", error);
+    return { success: false, message: "Cannot connect to server. Ensure backend is running." };
+  }
 }
 
 export function completeOnboardingForUser(user) {
