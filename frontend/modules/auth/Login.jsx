@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { ArrowRight, Building2, ShieldCheck } from "lucide-react";
 import AuthLayout from "@/layouts/AuthLayout";
 import { useAuth } from "@/context/AuthContext";
+import { getRoleHomePath } from "@/services/authService";
 
 const presetRoles = [
   { id: "OWNER", label: "Owner Login", description: "Owners and admins" },
@@ -18,17 +19,34 @@ export default function Login() {
     password: "password123",
   });
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
-    const result = signIn(form);
-    if (!result.success) {
-      setError(result.message);
-      return;
-    }
+    setError("");
+    setLoading(true);
 
-    const roleRedirect = form.email.includes("employee") ? "/employee/dashboard" : "/dashboard";
-    navigate(roleRedirect, { replace: true });
+    try {
+      // Await async signIn from AuthContext
+      const result = await signIn(form);
+
+      if (!result.success) {
+        setError(result.message || "Invalid credentials");
+        setLoading(false);
+        return;
+      }
+
+      // Determine path dynamically based on returned user role
+      const userRole = result.user?.role || "OWNER";
+      const targetPath = getRoleHomePath ? getRoleHomePath(userRole) : "/dashboard";
+
+      navigate(targetPath, { replace: true });
+    } catch (err) {
+      console.error("Login Error:", err);
+      setError("An unexpected error occurred during login.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -85,8 +103,12 @@ export default function Login() {
 
         {error ? <p className="text-sm text-rose-400">{error}</p> : null}
 
-        <button type="submit" className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500">
-          Continue to dashboard
+        <button
+          type="submit"
+          disabled={loading}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50"
+        >
+          {loading ? "Signing in..." : "Continue to dashboard"}
           <ArrowRight size={16} />
         </button>
       </form>
