@@ -1,8 +1,15 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowRight, Sparkles } from "lucide-react";
+import { ArrowRight, Sparkles, Eye, EyeOff, ChevronDown } from "lucide-react";
 import AuthLayout from "@/layouts/AuthLayout";
 import { useAuth } from "@/context/AuthContext";
+
+const ROLES = [
+  { value: "OWNER", label: "Owner" },
+  { value: "MANAGER", label: "Manager / Admin" },
+  { value: "EMPLOYEE", label: "Employee / Staff" },
+  { value: "CONTRACTOR", label: "Freelancer / Contractor" },
+];
 
 export default function Register() {
   const navigate = useNavigate();
@@ -15,6 +22,7 @@ export default function Register() {
     role: "OWNER",
   });
 
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -26,10 +34,7 @@ export default function Register() {
     try {
       console.log("Sending signup request with form:", form);
 
-      const result = await signUp({
-        ...form,
-        role: "OWNER",
-      });
+      const result = await signUp(form);
 
       // Only navigate if signup was successful
       if (result && result.success) {
@@ -58,6 +63,7 @@ export default function Register() {
           </div>
         )}
 
+        {/* Full Name */}
         <input
           required
           value={form.name}
@@ -71,6 +77,7 @@ export default function Register() {
           placeholder="Full name"
         />
 
+        {/* Work Email */}
         <input
           required
           type="email"
@@ -85,23 +92,52 @@ export default function Register() {
           placeholder="Work email"
         />
 
-        <input
-          required
-          type="password"
-          value={form.password}
-          onChange={(event) =>
-            setForm({
-              ...form,
-              password: event.target.value,
-            })
-          }
-          className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-sm text-white outline-none focus:border-indigo-500"
-          placeholder="Create password"
-        />
+        {/* Password with Eye toggle */}
+        <div className="relative">
+          <input
+            required
+            type={showPassword ? "text" : "password"}
+            value={form.password}
+            onChange={(event) =>
+              setForm({
+                ...form,
+                password: event.target.value,
+              })
+            }
+            className="w-full rounded-xl border border-slate-700 bg-slate-900 py-3 pl-3 pr-10 text-sm text-white outline-none focus:border-indigo-500"
+            placeholder="Create password"
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+          >
+            {showPassword ? <Eye size={18} /> : <EyeOff size={18} />}
+          </button>
+        </div>
 
-        {/* Default role - Owner only */}
-        <div className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-sm text-slate-300">
-          Owner
+        {/* Role Select Dropdown */}
+        <div className="relative">
+          <select
+            value={form.role}
+            onChange={(event) =>
+              setForm({
+                ...form,
+                role: event.target.value,
+              })
+            }
+            className="w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 py-3 pl-3 pr-10 text-sm text-white outline-none focus:border-indigo-500"
+          >
+            {ROLES.map((role) => (
+              <option key={role.value} value={role.value} className="bg-slate-900 text-white">
+                {role.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            size={18}
+            className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+          />
         </div>
 
         <button
