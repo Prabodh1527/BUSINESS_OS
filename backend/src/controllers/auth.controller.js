@@ -1,6 +1,7 @@
-
 import User from '../models/User.js';
 import jwt from 'jsonwebtoken';
+import nodemailer from 'nodemailer';
+import bcrypt from 'bcryptjs';
 
 // Helper function to generate JWT
 const generateToken = (id) => {
@@ -19,14 +20,16 @@ export const registerUser = async (req, res) => {
       return res.status(400).json({ message: 'Please fill in all required fields' });
     }
 
-    const userExists = await User.findOne({ email });
+    const cleanEmail = email.trim().toLowerCase();
+    const userExists = await User.findOne({ email: cleanEmail });
+
     if (userExists) {
       return res.status(400).json({ message: 'User already exists' });
     }
 
     const user = await User.create({
       name,
-      email,
+      email: cleanEmail,
       password,
       role: role ? role.toUpperCase() : 'OWNER',
     });
@@ -53,8 +56,9 @@ export const registerUser = async (req, res) => {
 export const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
+    const cleanEmail = email ? email.trim().toLowerCase() : '';
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: cleanEmail });
 
     if (user && (await user.matchPassword(password))) {
       res.json({
@@ -70,5 +74,121 @@ export const loginUser = async (req, res) => {
   } catch (error) {
     console.error('Login Error:', error);
     res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Send password reset OTP via email
+// @route   POST /api/auth/forgot-password
+export const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: cleanEmail });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'No account found with this email.' });
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpires = Date.now() + 15 * 60 * 1000; // 15 minutes validity
+
+    // Save directly into MongoDB document to ensure schema persistence
+    await User.updateOne(
+      { _id: user._id },
+      { $set: { resetOtp: otp, resetOtpExpires: otpExpires } }
+    );
+
+    // Setup Nodemailer Transporter
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+
+    // Send email via Gmail SMTP
+    await transporter.sendMail({
+      from: `"Business OS" <${process.env.SMTP_USER}>`,
+      to: cleanEmail,
+      subject: 'Password Reset OTP Code',
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px; background-color: #0f172a; color: #ffffff; border-radius: 12px;">
+          <h2 style="color: #818cf8;">Business OS</h2>
+          <p>You requested a password reset. Use the OTP code below to proceed:</p>
+          <div style="background-color: #1e293b; padding: 16px; border-radius: 8px; display: inline-block; margin: 10px 0;">
+            <span style="font-size: 28px; font-weight: bold; letter-spacing: 4px; color: #34d399;">${otp}</span>
+          </div>
+          <p style="color: #94a3b8; font-size: 12px;">This code will expire in 15 minutes. If you did not request this, please ignore this email.</p>
+        </div>
+      `,
+    });
+
+    console.log(`🔑 OTP generated and saved in DB for ${cleanEmail}: ${otp}`);
+    return res.status(200).json({ success: true, message: 'OTP code sent to your Gmail address.' });
+  } catch (error) {
+    console.error('Forgot Password Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to send OTP email.' });
+  }
+};
+
+// @desc    Verify OTP and reset password
+// @route   POST /api/auth/reset-password
+export const resetPassword = async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ success: false, message: 'All fields are required.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanInputOtp = String(otp).trim();
+
+    // 1. Fetch user by email
+    const user = await User.findOne({ email: cleanEmail });
+
+    if (!user) {
+      console.log(`❌ Reset failed: User with email ${cleanEmail} not found.`);
+      return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
+    }
+
+    const cleanStoredOtp = user.resetOtp ? String(user.resetOtp).trim() : '';
+
+    // 2. Validate OTP Match
+    if (!cleanStoredOtp || cleanStoredOtp !== cleanInputOtp) {
+      console.log(`❌ Reset failed: Provided OTP (${cleanInputOtp}) does not match stored OTP (${cleanStoredOtp}).`);
+      return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
+    }
+
+    // 3. Check OTP Expiry
+    if (!user.resetOtpExpires || new Date(user.resetOtpExpires).getTime() < Date.now()) {
+      console.log(`❌ Reset failed: OTP has expired. Expiry: ${user.resetOtpExpires}, Now: ${Date.now()}`);
+      return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
+    }
+
+    // Hash the new password directly
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    // Update user password and clear OTP fields directly in DB
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $set: { password: hashedPassword },
+        $unset: { resetOtp: 1, resetOtpExpires: 1 },
+      }
+    );
+
+    console.log(`✅ Password successfully reset for ${cleanEmail}`);
+    return res.status(200).json({ success: true, message: 'Password successfully reset.' });
+  } catch (error) {
+    console.error('Reset Password Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to reset password.' });
   }
 };
