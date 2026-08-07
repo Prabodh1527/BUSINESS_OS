@@ -99,18 +99,15 @@ export const forgotPassword = async (req, res) => {
       return res.status(404).json({ success: false, message: 'No account found with this email.' });
     }
 
-    // Generate 6-digit OTP string
     const rawOtp = Math.floor(100000 + Math.random() * 900000).toString();
     const hashedOtp = hashOtp(rawOtp);
-    const otpExpires = Date.now() + 15 * 60 * 1000; // 15 minutes validity
+    const otpExpires = Date.now() + 15 * 60 * 1000;
 
-    // Store hashed OTP directly in MongoDB
     await User.updateOne(
       { _id: user._id },
       { $set: { resetOtp: hashedOtp, resetOtpExpires: otpExpires } }
     );
 
-    // Setup Nodemailer Transporter
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
@@ -135,7 +132,7 @@ export const forgotPassword = async (req, res) => {
       `,
     });
 
-   console.log(`✉️ OTP email sent to ${cleanEmail}`);
+    console.log(`✉️ OTP email sent to ${cleanEmail}`);
     return res.status(200).json({ success: true, message: 'OTP code sent to your Gmail address.' });
   } catch (error) {
     console.error('Forgot Password Error:', error);
@@ -160,27 +157,20 @@ export const resetPassword = async (req, res) => {
     const user = await User.findOne({ email: cleanEmail });
 
     if (!user || !user.resetOtp) {
-      console.log(`❌ Reset failed: No active OTP request found for ${cleanEmail}.`);
       return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
     }
 
-    // 1. Check Expiry
     if (!user.resetOtpExpires || new Date(user.resetOtpExpires).getTime() < Date.now()) {
-      console.log(`❌ Reset failed: OTP has expired for ${cleanEmail}.`);
       return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
     }
 
-    // 2. Check Match
     if (user.resetOtp !== hashedInputOtp) {
-      console.log(`❌ Reset failed: Input OTP (${cleanInputOtp}) does not match stored active OTP.`);
       return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
     }
 
-    // Hash the new password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
-    // Update password and clear OTP fields
     await User.updateOne(
       { _id: user._id },
       {
@@ -194,5 +184,83 @@ export const resetPassword = async (req, res) => {
   } catch (error) {
     console.error('Reset Password Error:', error);
     return res.status(500).json({ success: false, message: 'Failed to reset password.' });
+  }
+};
+
+// @desc    Create employee, save to DB & send credentials email
+// @route   POST /api/auth/create-employee
+export const createEmployee = async (req, res) => {
+  try {
+    const { name, email, department, designation, salary } = req.body;
+
+    if (!name || !email) {
+      return res.status(400).json({ success: false, message: 'Name and Email are required.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const userExists = await User.findOne({ email: cleanEmail });
+
+    if (userExists) {
+      return res.status(400).json({ success: false, message: 'Employee with this email already exists.' });
+    }
+
+    const rawPassword = 'Emp@' + crypto.randomBytes(3).toString('hex');
+
+    const employee = await User.create({
+      name,
+      email: cleanEmail,
+      password: rawPassword,
+      role: 'EMPLOYEE',
+      department: department || '',
+      designation: designation || '',
+      salary: salary || 0,
+    });
+
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+
+    const loginUrl = process.env.FRONTEND_URL || 'http://localhost:5173/login';
+
+    await transporter.sendMail({
+      from: `"Business OS" <${process.env.SMTP_USER}>`,
+      to: cleanEmail,
+      subject: 'Congratulations & Welcome to Business OS! 🎉',
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 24px; background-color: #07090e; color: #ffffff; border-radius: 12px; max-width: 520px; margin: 0 auto;">
+          <h2 style="color: #6366f1; margin-top: 0;">Welcome to the Team, ${name}!</h2>
+          <p style="color: #94a3b8; font-size: 14px;">Your employee account on Business OS has been created. Credentials:</p>
+          
+          <div style="background-color: #0f1422; border: 1px solid #1a2035; padding: 16px; border-radius: 10px; margin: 20px 0;">
+            <p style="margin: 4px 0; font-size: 13px; color: #94a3b8;">Email: <strong style="color: #ffffff;">${cleanEmail}</strong></p>
+            <p style="margin: 4px 0; font-size: 13px; color: #94a3b8;">Temporary Password: <strong style="color: #38bdf8; font-family: monospace; font-size: 16px;">${rawPassword}</strong></p>
+          </div>
+
+          <a href="${loginUrl}" style="background-color: #6366f1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-top: 10px; font-size: 13px;">
+            Login to Portal
+          </a>
+        </div>
+      `,
+    });
+
+    console.log(`✉️ Welcome email sent to ${cleanEmail}`);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Employee account created and welcome email sent successfully.',
+      user: {
+        _id: employee._id,
+        name: employee.name,
+        email: employee.email,
+        role: employee.role,
+      },
+    });
+  } catch (error) {
+    console.error('Create Employee Error:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
