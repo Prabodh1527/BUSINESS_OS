@@ -2,12 +2,18 @@ import User from '../models/User.js';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 
 // Helper function to generate JWT
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET || 'fallback_secret', {
     expiresIn: '30d',
   });
+};
+
+// Helper function to hash OTP using SHA-256
+const hashOtp = (otpString) => {
+  return crypto.createHash('sha256').update(otpString).digest('hex');
 };
 
 // @desc    Register a new user
@@ -93,14 +99,15 @@ export const forgotPassword = async (req, res) => {
       return res.status(404).json({ success: false, message: 'No account found with this email.' });
     }
 
-    // Generate 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate 6-digit OTP string
+    const rawOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const hashedOtp = hashOtp(rawOtp);
     const otpExpires = Date.now() + 15 * 60 * 1000; // 15 minutes validity
 
-    // Save directly into MongoDB document to ensure schema persistence
+    // Store hashed OTP directly in MongoDB
     await User.updateOne(
       { _id: user._id },
-      { $set: { resetOtp: otp, resetOtpExpires: otpExpires } }
+      { $set: { resetOtp: hashedOtp, resetOtpExpires: otpExpires } }
     );
 
     // Setup Nodemailer Transporter
@@ -112,7 +119,6 @@ export const forgotPassword = async (req, res) => {
       },
     });
 
-    // Send email via Gmail SMTP
     await transporter.sendMail({
       from: `"Business OS" <${process.env.SMTP_USER}>`,
       to: cleanEmail,
@@ -122,14 +128,14 @@ export const forgotPassword = async (req, res) => {
           <h2 style="color: #818cf8;">Business OS</h2>
           <p>You requested a password reset. Use the OTP code below to proceed:</p>
           <div style="background-color: #1e293b; padding: 16px; border-radius: 8px; display: inline-block; margin: 10px 0;">
-            <span style="font-size: 28px; font-weight: bold; letter-spacing: 4px; color: #34d399;">${otp}</span>
+            <span style="font-size: 28px; font-weight: bold; letter-spacing: 4px; color: #34d399;">${rawOtp}</span>
           </div>
           <p style="color: #94a3b8; font-size: 12px;">This code will expire in 15 minutes. If you did not request this, please ignore this email.</p>
         </div>
       `,
     });
 
-    console.log(`🔑 OTP generated and saved in DB for ${cleanEmail}: ${otp}`);
+   console.log(`✉️ OTP email sent to ${cleanEmail}`);
     return res.status(200).json({ success: true, message: 'OTP code sent to your Gmail address.' });
   } catch (error) {
     console.error('Forgot Password Error:', error);
@@ -149,34 +155,32 @@ export const resetPassword = async (req, res) => {
 
     const cleanEmail = email.trim().toLowerCase();
     const cleanInputOtp = String(otp).trim();
+    const hashedInputOtp = hashOtp(cleanInputOtp);
 
-    // 1. Fetch user by email
     const user = await User.findOne({ email: cleanEmail });
 
-    if (!user) {
-      console.log(`❌ Reset failed: User with email ${cleanEmail} not found.`);
+    if (!user || !user.resetOtp) {
+      console.log(`❌ Reset failed: No active OTP request found for ${cleanEmail}.`);
       return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
     }
 
-    const cleanStoredOtp = user.resetOtp ? String(user.resetOtp).trim() : '';
-
-    // 2. Validate OTP Match
-    if (!cleanStoredOtp || cleanStoredOtp !== cleanInputOtp) {
-      console.log(`❌ Reset failed: Provided OTP (${cleanInputOtp}) does not match stored OTP (${cleanStoredOtp}).`);
-      return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
-    }
-
-    // 3. Check OTP Expiry
+    // 1. Check Expiry
     if (!user.resetOtpExpires || new Date(user.resetOtpExpires).getTime() < Date.now()) {
-      console.log(`❌ Reset failed: OTP has expired. Expiry: ${user.resetOtpExpires}, Now: ${Date.now()}`);
+      console.log(`❌ Reset failed: OTP has expired for ${cleanEmail}.`);
       return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
     }
 
-    // Hash the new password directly
+    // 2. Check Match
+    if (user.resetOtp !== hashedInputOtp) {
+      console.log(`❌ Reset failed: Input OTP (${cleanInputOtp}) does not match stored active OTP.`);
+      return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
+    }
+
+    // Hash the new password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
-    // Update user password and clear OTP fields directly in DB
+    // Update password and clear OTP fields
     await User.updateOne(
       { _id: user._id },
       {

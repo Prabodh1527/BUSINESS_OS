@@ -6,9 +6,6 @@ import { useAuth } from "@/context/AuthContext";
 
 const ROLES = [
   { value: "OWNER", label: "Owner" },
-  { value: "MANAGER", label: "Manager / Admin" },
-  { value: "EMPLOYEE", label: "Employee / Staff" },
-  { value: "CONTRACTOR", label: "Freelancer / Contractor" },
 ];
 
 export default function Register() {
