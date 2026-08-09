@@ -1,55 +1,42 @@
-import mongoose from 'mongoose';
-import bcrypt from 'bcryptjs';
+import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
   {
     name: {
       type: String,
-      required: [true, 'Name is required'],
-      trim: true,
+      required: false,
+      default: function () {
+        return this.email ? this.email.split("@")[0] : "User";
+      },
     },
     email: {
       type: String,
-      required: [true, 'Email is required'],
+      required: [true, "Email is required"],
       unique: true,
       lowercase: true,
       trim: true,
     },
     password: {
       type: String,
-      required: [true, 'Password is required'],
-      minlength: 6,
+      required: [true, "Password is required"],
+      select: false, // Keeps password hidden unless explicitly asked for
     },
     role: {
       type: String,
-      enum: ['OWNER', 'MANAGER', 'RECEPTIONIST', 'EMPLOYEE', 'ADMIN', 'CUSTOMER', 'admin', 'manager', 'employee', 'customer'],
-      default: 'OWNER',
+      enum: ["OWNER", "MANAGER", "EMPLOYEE", "ADMIN", "USER"],
+      default: "OWNER",
     },
-    // Password Reset Fields (Required for OTP storage)
-    resetOtp: {
+    phone: String,
+    salary: String,
+    status: {
       type: String,
-      default: null,
+      default: "Active",
     },
-    resetOtpExpires: {
-      type: Date,
-      default: null,
-    },
+    resetOtp: String,
+    resetOtpExpire: Date,
   },
   { timestamps: true }
 );
 
-// Hash password before saving to database
-userSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) return next();
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
-  next();
-});
-
-// Compare entered password with hashed password
-userSchema.methods.matchPassword = async function (enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
-};
-
-const User = mongoose.model('User', userSchema);
+const User = mongoose.models.User || mongoose.model("User", userSchema);
 export default User;

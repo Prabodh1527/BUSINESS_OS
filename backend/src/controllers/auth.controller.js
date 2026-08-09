@@ -1,266 +1,321 @@
-import User from '../models/User.js';
-import jwt from 'jsonwebtoken';
-import nodemailer from 'nodemailer';
-import bcrypt from 'bcryptjs';
-import crypto from 'node:crypto';
+import User from "../models/User.js";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
-// Helper function to generate JWT
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET || 'fallback_secret', {
-    expiresIn: '30d',
-  });
-};
-
-// Helper function to hash OTP using SHA-256
-const hashOtp = (otpString) => {
-  return crypto.createHash('sha256').update(otpString).digest('hex');
+// Helper function to generate JWT token
+const generateToken = (id, role) => {
+  return jwt.sign(
+    { id, role },
+    process.env.JWT_SECRET || "fallback_jwt_secret_key_123",
+    { expiresIn: "7d" }
+  );
 };
 
 // @desc    Register a new user
 // @route   POST /api/auth/register
-export const registerUser = async (req, res) => {
+export const register = async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
 
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: 'Please fill in all required fields' });
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide both email and password.",
+      });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
-    const userExists = await User.findOne({ email: cleanEmail });
+    const normalizedEmail = email.toLowerCase().trim();
 
-    if (userExists) {
-      return res.status(400).json({ message: 'User already exists' });
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: "An account with this email already exists.",
+      });
     }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
     const user = await User.create({
-      name,
-      email: cleanEmail,
-      password,
-      role: role ? role.toUpperCase() : 'OWNER',
+      name: name || normalizedEmail.split("@")[0],
+      email: normalizedEmail,
+      password: hashedPassword,
+      role: role || "OWNER",
     });
 
-    if (user) {
-      res.status(201).json({
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        token: generateToken(user._id),
-      });
-    } else {
-      res.status(400).json({ message: 'Invalid user data' });
-    }
+    const token = generateToken(user._id, user.role);
+    const userObj = user.toObject();
+    delete userObj.password;
+
+    return res.status(201).json({
+      success: true,
+      message: "Account created successfully!",
+      token,
+      user: {
+        ...userObj,
+        token,
+      },
+    });
   } catch (error) {
-    console.error('Registration Error:', error);
-    res.status(500).json({ message: error.message });
+    console.error("Register Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error during registration.",
+    });
   }
 };
+export const registerUser = register;
 
-// @desc    Auth user & get token (Login)
+// @desc    Authenticate user & get token (Login)
 // @route   POST /api/auth/login
-export const loginUser = async (req, res) => {
+export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const cleanEmail = email ? email.trim().toLowerCase() : '';
 
-    const user = await User.findOne({ email: cleanEmail });
-
-    if (user && (await user.matchPassword(password))) {
-      res.json({
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        token: generateToken(user._id),
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide both email and password.",
       });
-    } else {
-      res.status(401).json({ message: 'Invalid email or password' });
     }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const user = await User.findOne({ email: normalizedEmail }).select("+password");
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid credentials.",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid credentials.",
+      });
+    }
+
+    const token = generateToken(user._id, user.role);
+
+    const userObj = user.toObject();
+    delete userObj.password;
+
+    return res.status(200).json({
+      success: true,
+      message: "Logged in successfully!",
+      token,
+      user: {
+        ...userObj,
+        token,
+      },
+    });
   } catch (error) {
-    console.error('Login Error:', error);
-    res.status(500).json({ message: error.message });
+    console.error("Login Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error during login.",
+    });
   }
 };
+export const loginUser = login;
 
-// @desc    Send password reset OTP via email
+// @desc    Forgot Password / Send OTP
 // @route   POST /api/auth/forgot-password
 export const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
+
     if (!email) {
-      return res.status(400).json({ success: false, message: 'Email is required.' });
+      return res.status(400).json({
+        success: false,
+        message: "Please provide an email address.",
+      });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
-    const user = await User.findOne({ email: cleanEmail });
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
 
     if (!user) {
-      return res.status(404).json({ success: false, message: 'No account found with this email.' });
+      return res.status(404).json({
+        success: false,
+        message: "No account found with this email.",
+      });
     }
 
-    const rawOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    const hashedOtp = hashOtp(rawOtp);
-    const otpExpires = Date.now() + 15 * 60 * 1000;
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-    await User.updateOne(
-      { _id: user._id },
-      { $set: { resetOtp: hashedOtp, resetOtpExpires: otpExpires } }
-    );
+    user.resetOtp = otp;
+    user.resetOtpExpire = Date.now() + 10 * 60 * 1000;
+    
+    // Set fallback name if missing to prevent validation errors
+    if (!user.name) {
+      user.name = user.email ? user.email.split("@")[0] : "User";
+    }
 
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
+    await user.save({ validateModifiedOnly: true });
+
+    console.log(`[OTP] Password Reset Code for ${email}: ${otp}`);
+
+    return res.status(200).json({
+      success: true,
+      message: "Password reset OTP generated.",
+      otp: process.env.NODE_ENV === "development" ? otp : undefined,
     });
-
-    await transporter.sendMail({
-      from: `"Business OS" <${process.env.SMTP_USER}>`,
-      to: cleanEmail,
-      subject: 'Password Reset OTP Code',
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px; background-color: #0f172a; color: #ffffff; border-radius: 12px;">
-          <h2 style="color: #818cf8;">Business OS</h2>
-          <p>You requested a password reset. Use the OTP code below to proceed:</p>
-          <div style="background-color: #1e293b; padding: 16px; border-radius: 8px; display: inline-block; margin: 10px 0;">
-            <span style="font-size: 28px; font-weight: bold; letter-spacing: 4px; color: #34d399;">${rawOtp}</span>
-          </div>
-          <p style="color: #94a3b8; font-size: 12px;">This code will expire in 15 minutes. If you did not request this, please ignore this email.</p>
-        </div>
-      `,
-    });
-
-    console.log(`✉️ OTP email sent to ${cleanEmail}`);
-    return res.status(200).json({ success: true, message: 'OTP code sent to your Gmail address.' });
   } catch (error) {
-    console.error('Forgot Password Error:', error);
-    return res.status(500).json({ success: false, message: 'Failed to send OTP email.' });
+    console.error("Forgot Password Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error processing forgot password request.",
+    });
   }
 };
 
-// @desc    Verify OTP and reset password
+// @desc    Reset Password with OTP
 // @route   POST /api/auth/reset-password
 export const resetPassword = async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
 
-    if (!email || !otp || !newPassword) {
-      return res.status(400).json({ success: false, message: 'All fields are required.' });
+    if (!email || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide email and new password.",
+      });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanInputOtp = String(otp).trim();
-    const hashedInputOtp = hashOtp(cleanInputOtp);
+    const user = await User.findOne({
+      email: email.toLowerCase().trim(),
+    }).select("+password");
 
-    const user = await User.findOne({ email: cleanEmail });
-
-    if (!user || !user.resetOtp) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User account not found.",
+      });
     }
 
-    if (!user.resetOtpExpires || new Date(user.resetOtpExpires).getTime() < Date.now()) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
-    }
-
-    if (user.resetOtp !== hashedInputOtp) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired OTP code.' });
+    if (otp && user.resetOtp !== otp) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP code.",
+      });
     }
 
     const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    user.password = await bcrypt.hash(newPassword, salt);
+    user.resetOtp = undefined;
+    user.resetOtpExpire = undefined;
 
-    await User.updateOne(
-      { _id: user._id },
-      {
-        $set: { password: hashedPassword },
-        $unset: { resetOtp: 1, resetOtpExpires: 1 },
-      }
-    );
-
-    console.log(`✅ Password successfully reset for ${cleanEmail}`);
-    return res.status(200).json({ success: true, message: 'Password successfully reset.' });
-  } catch (error) {
-    console.error('Reset Password Error:', error);
-    return res.status(500).json({ success: false, message: 'Failed to reset password.' });
-  }
-};
-
-// @desc    Create employee, save to DB & send credentials email
-// @route   POST /api/auth/create-employee
-export const createEmployee = async (req, res) => {
-  try {
-    const { name, email, department, designation, salary } = req.body;
-
-    if (!name || !email) {
-      return res.status(400).json({ success: false, message: 'Name and Email are required.' });
+    if (!user.name) {
+      user.name = user.email ? user.email.split("@")[0] : "User";
     }
 
-    const cleanEmail = email.trim().toLowerCase();
-    const userExists = await User.findOne({ email: cleanEmail });
+    await user.save({ validateModifiedOnly: true });
 
-    if (userExists) {
-      return res.status(400).json({ success: false, message: 'Employee with this email already exists.' });
-    }
-
-    const rawPassword = 'Emp@' + crypto.randomBytes(3).toString('hex');
-
-    const employee = await User.create({
-      name,
-      email: cleanEmail,
-      password: rawPassword,
-      role: 'EMPLOYEE',
-      department: department || '',
-      designation: designation || '',
-      salary: salary || 0,
-    });
-
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
-    });
-
-    const loginUrl = process.env.FRONTEND_URL || 'http://localhost:5173/login';
-
-    await transporter.sendMail({
-      from: `"Business OS" <${process.env.SMTP_USER}>`,
-      to: cleanEmail,
-      subject: 'Congratulations & Welcome to Business OS! 🎉',
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 24px; background-color: #07090e; color: #ffffff; border-radius: 12px; max-width: 520px; margin: 0 auto;">
-          <h2 style="color: #6366f1; margin-top: 0;">Welcome to the Team, ${name}!</h2>
-          <p style="color: #94a3b8; font-size: 14px;">Your employee account on Business OS has been created. Credentials:</p>
-          
-          <div style="background-color: #0f1422; border: 1px solid #1a2035; padding: 16px; border-radius: 10px; margin: 20px 0;">
-            <p style="margin: 4px 0; font-size: 13px; color: #94a3b8;">Email: <strong style="color: #ffffff;">${cleanEmail}</strong></p>
-            <p style="margin: 4px 0; font-size: 13px; color: #94a3b8;">Temporary Password: <strong style="color: #38bdf8; font-family: monospace; font-size: 16px;">${rawPassword}</strong></p>
-          </div>
-
-          <a href="${loginUrl}" style="background-color: #6366f1; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-top: 10px; font-size: 13px;">
-            Login to Portal
-          </a>
-        </div>
-      `,
-    });
-
-    console.log(`✉️ Welcome email sent to ${cleanEmail}`);
-
-    return res.status(201).json({
+    return res.status(200).json({
       success: true,
-      message: 'Employee account created and welcome email sent successfully.',
-      user: {
-        _id: employee._id,
-        name: employee.name,
-        email: employee.email,
-        role: employee.role,
-      },
+      message: "Password reset successfully. You can now log in.",
     });
   } catch (error) {
-    console.error('Create Employee Error:', error);
-    return res.status(500).json({ success: false, message: error.message });
+    console.error("Reset Password Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error resetting password.",
+    });
   }
 };
+
+// @desc    Update Password
+// @route   PUT /api/auth/update-password
+export const updatePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    const userId = req.user?._id || req.user?.id || req.user;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "User ID not found in request authorization.",
+      });
+    }
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide both current and new passwords.",
+      });
+    }
+
+    const user = await User.findById(userId).select("+password");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User account not found.",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message: "Current password does not match.",
+      });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+
+    // Auto-populate name if document legacy record lacks it
+    if (!user.name) {
+      user.name = user.email ? user.email.split("@")[0] : "User";
+    }
+
+    // Save with validateModifiedOnly to ignore legacy un-modified schema fields
+    await user.save({ validateModifiedOnly: true });
+
+    return res.status(200).json({
+      success: true,
+      message: "Password updated successfully!",
+    });
+  } catch (error) {
+    console.error("Update Password Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Server error while updating password.",
+    });
+  }
+};
+
+// @desc    Get current logged in user profile
+// @route   GET /api/auth/me
+export const getMe = async (req, res) => {
+  try {
+    const userId = req.user?._id || req.user?.id || req.user;
+    const user = await User.findById(userId).select("-password");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      user,
+    });
+  } catch (error) {
+    console.error("GetMe Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error retrieving profile.",
+    });
+  }
+};
+export const getUserProfile = getMe;

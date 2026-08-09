@@ -40,7 +40,7 @@ if (process.env.SMTP_USER && process.env.SMTP_PASS) {
     if (error) {
       console.error('❌ Nodemailer Transporter Error:', error.message);
     } else {
-      console.log('✅ SMTP Mailer is ready to send OTP emails');
+      console.log('✅ SMTP Mailer is ready to send emails');
     }
   });
 } else {
@@ -55,6 +55,7 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Backend server is running!' });
 });
 
+// Start Server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
