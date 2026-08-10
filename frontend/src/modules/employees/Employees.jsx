@@ -40,30 +40,6 @@ const initialEmployees = [
     leaveBalance: 8,
     status: "Active",
   },
-  {
-    id: 3,
-    name: "Sneha Patel",
-    role: "Beautician",
-    phone: "+91 9123456780",
-    email: "sneha@gmail.com",
-    joining: "20 Feb 2025",
-    salary: "₹35,000",
-    attendance: "Absent",
-    leaveBalance: 5,
-    status: "Active",
-  },
-  {
-    id: 4,
-    name: "Rohit Verma",
-    role: "Hair Stylist",
-    phone: "+91 9012345678",
-    email: "rohit@gmail.com",
-    joining: "10 Apr 2025",
-    salary: "₹32,000",
-    attendance: "Present",
-    leaveBalance: 10,
-    status: "Inactive",
-  },
 ];
 
 const stats = [
@@ -115,32 +91,35 @@ export default function Employees() {
     e.preventDefault();
     setLoading(true);
 
+    const token = localStorage.getItem("token");
+
     try {
       const response = await fetch("http://localhost:5000/api/auth/create-employee", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: token ? `Bearer ${token}` : "",
         },
         body: JSON.stringify({
           name: form.name,
           email: form.email,
           designation: form.role,
-          department: "General",
+          phone: form.phone,
           salary: form.salary,
+          status: form.status,
         }),
       });
 
       const data = await response.json();
 
-      if (data.success) {
-        alert("Employee created successfully! Credentials emailed to user.");
+      if (response.ok || data.success) {
+        alert("Employee created and login credentials sent via email!");
 
-        // Add to local state list
         setEmployees([
           ...employees,
           {
             ...form,
-            id: data.user?._id || Date.now(),
+            id: data.employee?._id || Date.now(),
             attendance: "Not Marked",
             joining: "Today",
             leaveBalance: 12,
@@ -170,7 +149,6 @@ export default function Employees() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-white">Employees</h1>
@@ -188,7 +166,6 @@ export default function Employees() {
         </button>
       </div>
 
-      {/* Employee Form */}
       {showForm && (
         <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <div className="mb-5 flex items-center justify-between">
@@ -261,17 +238,15 @@ export default function Employees() {
               disabled={loading}
               className="rounded-xl bg-indigo-600 p-3 text-white hover:bg-indigo-500 disabled:opacity-50"
             >
-              {loading ? "Creating & Sending Email..." : "Save Employee"}
+              {loading ? "Sending Login Credentials..." : "Save Employee"}
             </button>
           </form>
         </div>
       )}
 
-      {/* Stats */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {stats.map((item) => {
           const Icon = item.icon;
-
           return (
             <div
               key={item.title}
@@ -280,53 +255,16 @@ export default function Employees() {
               <div className={`inline-flex rounded-xl p-3 ${item.color}`}>
                 <Icon size={20} />
               </div>
-
               <h2 className="mt-5 text-2xl font-bold text-white">{item.value}</h2>
-
               <p className="text-sm text-slate-400">{item.title}</p>
             </div>
           );
         })}
       </div>
 
-      {/* Employee Management Modules */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <button
-          onClick={() => navigate("/employees/attendance")}
-          className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-left hover:border-indigo-500"
-        >
-          <h2 className="text-xl font-semibold text-white">Attendance</h2>
-          <p className="mt-2 text-sm text-slate-400">
-            View daily employee check-in and attendance records.
-          </p>
-        </button>
-
-        <button
-          onClick={() => navigate("/employees/leaves")}
-          className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-left hover:border-indigo-500"
-        >
-          <h2 className="text-xl font-semibold text-white">Leave Requests</h2>
-          <p className="mt-2 text-sm text-slate-400">
-            Approve or reject employee leave applications.
-          </p>
-        </button>
-
-        <button
-          onClick={() => navigate("/employees/payroll")}
-          className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-left hover:border-indigo-500"
-        >
-          <h2 className="text-xl font-semibold text-white">Payroll</h2>
-          <p className="mt-2 text-sm text-slate-400">
-            Generate salaries and send payslips.
-          </p>
-        </button>
-      </div>
-
-      {/* Search + Filter */}
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-4">
         <div className="relative w-full max-w-md">
           <Search size={18} className="absolute left-3 top-3 text-slate-500" />
-
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -358,7 +296,6 @@ export default function Employees() {
         </div>
       </div>
 
-      {/* Employee Table */}
       <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
         <table className="w-full">
           <thead className="border-b border-slate-800 bg-slate-800/40">

@@ -30,10 +30,11 @@ export default function Login() {
       const result = await signIn({
         email: form.email,
         password: form.password,
+        role: mode,
       });
 
       if (!result || !result.success) {
-        setError(result?.message || "Invalid email or password. Please create an account first.");
+        setError(result?.message || "Invalid credentials. Check your password or role.");
         setLoading(false);
         return;
       }
@@ -89,7 +90,6 @@ export default function Login() {
               placeholder="Enter your registered email"
             />
             
-            {/* Password input with corrected show/hide icon logic */}
             <div className="relative">
               <input
                 type={showPassword ? "text" : "password"}

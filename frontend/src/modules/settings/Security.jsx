@@ -1,593 +1,159 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
-import {
-  ShieldCheck,
-  Lock,
-  Smartphone,
-  Monitor,
-  Save,
-  CheckCircle,
-} from "lucide-react";
-
-
-const sessions = [
-
-{
-device:"Windows Chrome",
-location:"Chennai, India",
-time:"Active now",
-icon:Monitor,
-},
-
-
-{
-device:"Android Mobile",
-location:"Chennai, India",
-time:"2 hours ago",
-icon:Smartphone,
-},
-
-
-];
-
-
-
-const activities=[
-
-{
-action:"Successful login",
-time:"Today, 10:30 AM",
-},
-
-
-{
-action:"Password updated",
-time:"12 July 2026",
-},
-
-
-{
-action:"New device connected",
-time:"5 July 2026",
-},
-
-
-];
-
-
-
-export default function Security(){
-
-
-const [twoFactor,setTwoFactor]=useState(false);
-
-const [saved,setSaved]=useState(false);
-
-
-const [password,setPassword]=useState({
-
-current:"",
-new:"",
-confirm:"",
-
-});
-
-
-
-const handleChange=(e)=>{
-
-setPassword({
-
-...password,
-
-[e.target.name]:e.target.value
-
-});
-
-};
-
-
-
-
-const saveSecurity=(e)=>{
-
-e.preventDefault();
-
-setSaved(true);
-
-
-setTimeout(()=>{
-
-setSaved(false);
-
-},2000);
-
-
-};
-
-
-
-
-
-return(
-
-<div className="space-y-6">
-
-
-
-{/* Header */}
-
-<div>
-
-
-<Link
-
-to="/settings"
-
-className="mb-3 block text-sm text-slate-400 hover:text-white"
-
->
-
-← Back to Settings
-
-</Link>
-
-
-
-<h1 className="text-3xl font-bold text-white">
-
-Security
-
-</h1>
-
-
-<p className="mt-1 text-slate-400">
-
-Protect your Business OS account and manage security preferences.
-
-</p>
-
-
-</div>
-
-
-
-
-
-
-
-
-
-{/* Password */}
-
-
-
-<form
-
-onSubmit={saveSecurity}
-
-className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
-
->
-
-
-<div className="flex items-center gap-3 mb-6">
-
-
-<div className="rounded-xl bg-indigo-500/10 p-3 text-indigo-400">
-
-<Lock size={22}/>
-
-</div>
-
-
-<h2 className="text-xl font-semibold text-white">
-
-Change Password
-
-</h2>
-
-
-</div>
-
-
-
-
-
-<div className="grid gap-5 md:grid-cols-3">
-
-
-
-<input
-
-type="password"
-
-name="current"
-
-value={password.current}
-
-onChange={handleChange}
-
-placeholder="Current Password"
-
-className="rounded-xl border border-slate-700 bg-slate-800 p-3 text-white"
-
-/>
-
-
-
-
-
-<input
-
-type="password"
-
-name="new"
-
-value={password.new}
-
-onChange={handleChange}
-
-placeholder="New Password"
-
-className="rounded-xl border border-slate-700 bg-slate-800 p-3 text-white"
-
-/>
-
-
-
-
-
-<input
-
-type="password"
-
-name="confirm"
-
-value={password.confirm}
-
-onChange={handleChange}
-
-placeholder="Confirm Password"
-
-className="rounded-xl border border-slate-700 bg-slate-800 p-3 text-white"
-
-/>
-
-
-
-</div>
-
-
-
-
-
-
-<button
-
-className="mt-5 flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-white"
-
->
-
-<Save size={18}/>
-
-Update Password
-
-</button>
-
-
-
-{
-
-saved &&
-
-<p className="mt-3 text-sm text-emerald-400">
-
-Security settings updated successfully
-
-</p>
-
-}
-
-
-
-</form>
-
-
-
-
-
-
-
-
-
-{/* Two Factor */}
-
-
-
-<div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-
-
-<div className="flex items-center justify-between">
-
-
-<div className="flex items-center gap-3">
-
-
-<div className="rounded-xl bg-emerald-500/10 p-3 text-emerald-400">
-
-<ShieldCheck size={22}/>
-
-</div>
-
-
-
-<div>
-
-
-<h2 className="text-xl font-semibold text-white">
-
-Two Factor Authentication
-
-</h2>
-
-
-<p className="text-sm text-slate-400">
-
-Add an extra layer of account security.
-
-</p>
-
-
-</div>
-
-
-</div>
-
-
-
-
-
-
-<button
-
-onClick={()=>setTwoFactor(!twoFactor)}
-
-className={`rounded-full px-5 py-2 text-sm ${
-twoFactor
-
-?
-
-"bg-emerald-500 text-white"
-
-:
-
-"bg-slate-700 text-slate-300"
-
-}`}
-
->
-
-{
-
-twoFactor
-
-?
-
-"Enabled"
-
-:
-
-"Disabled"
-
-}
-
-</button>
-
-
-
-</div>
-
-
-</div>
-
-
-
-
-
-
-
-
-
-{/* Sessions */}
-
-
-
-<div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-
-
-<h2 className="mb-5 text-xl font-semibold text-white">
-
-Active Sessions
-
-</h2>
-
-
-
-<div className="space-y-4">
-
-
-{
-
-sessions.map((session)=>
-
-{
-
-const Icon=session.icon;
-
-
-return(
-
-<div
-
-key={session.device}
-
-className="flex items-center justify-between rounded-xl bg-slate-800 p-4"
-
->
-
-
-<div className="flex items-center gap-3">
-
-
-<div className="rounded-xl bg-slate-700 p-3 text-indigo-400">
-
-<Icon size={20}/>
-
-</div>
-
-
-<div>
-
-<p className="text-white font-medium">
-
-{session.device}
-
-</p>
-
-
-<p className="text-sm text-slate-400">
-
-{session.location}
-
-</p>
-
-
-</div>
-
-
-</div>
-
-
-
-<p className="text-sm text-emerald-400">
-
-{session.time}
-
-</p>
-
-
-
-</div>
-
-)
-
-}
-
-)
-
-}
-
-
-
-</div>
-
-
-</div>
-
-
-
-
-
-
-
-
-
-{/* Activity */}
-
-
-
-<div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-
-
-<h2 className="mb-5 text-xl font-semibold text-white">
-
-Login Activity
-
-</h2>
-
-
-
-<div className="space-y-3">
-
-
-{
-
-activities.map((item)=>(
-
-
-<div
-
-key={item.action}
-
-className="flex items-center justify-between rounded-xl bg-slate-800 p-4"
-
->
-
-
-<div className="flex items-center gap-3">
-
-
-<CheckCircle
-
-size={18}
-
-className="text-emerald-400"
-
-/>
-
-
-<p className="text-white">
-
-{item.action}
-
-</p>
-
-
-</div>
-
-
-
-<p className="text-sm text-slate-400">
-
-{item.time}
-
-</p>
-
-
-
-</div>
-
-
-))
-
-
-}
-
-
-
-</div>
-
-
-</div>
-
-
-
-
-
-</div>
-
-);
-
-
+import React, { useState } from "react";
+
+export default function Security() {
+  const [formData, setFormData] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState({ type: "", text: "" });
+
+  const handleChange = (e) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  const handlePasswordSubmit = async (e) => {
+    e.preventDefault();
+    setMessage({ type: "", text: "" });
+
+    if (formData.newPassword !== formData.confirmPassword) {
+      setMessage({ type: "error", text: "New passwords do not match!" });
+      return;
+    }
+
+    if (formData.newPassword.length < 6) {
+      setMessage({
+        type: "error",
+        text: "Password must be at least 6 characters long.",
+      });
+      return;
+    }
+
+    const token = localStorage.getItem("token");
+
+    if (!token) {
+      setMessage({
+        type: "error",
+        text: "You are not logged in. Please log in again.",
+      });
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const response = await fetch(
+        "http://localhost:5000/api/auth/update-password",
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            currentPassword: formData.currentPassword,
+            newPassword: formData.newPassword,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to update password.");
+      }
+
+      setMessage({
+        type: "success",
+        text: data.message || "Password updated successfully!",
+      });
+      setFormData({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    } catch (err) {
+      setMessage({
+        type: "error",
+        text: err.message || "Server error while updating password.",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="p-6 max-w-4xl mx-auto space-y-8">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-white shadow-xl">
+        <div className="flex items-center space-x-3 mb-6">
+          <div className="p-3 bg-indigo-600/20 text-indigo-400 rounded-xl">
+            <svg
+              className="w-6 h-6"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 002-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+              />
+            </svg>
+          </div>
+          <h2 className="text-xl font-semibold">Change Password</h2>
+        </div>
+
+        {message.text && (
+          <div
+            className={`p-4 mb-6 rounded-xl border ${
+              message.type === "error"
+                ? "bg-red-950/50 border-red-800 text-red-300"
+                : "bg-emerald-950/50 border-emerald-800 text-emerald-300"
+            }`}
+          >
+            {message.text}
+          </div>
+        )}
+
+        <form onSubmit={handlePasswordSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <input
+              type="password"
+              name="currentPassword"
+              placeholder="Current Password"
+              value={formData.currentPassword}
+              onChange={handleChange}
+              required
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3 text-white outline-none focus:border-indigo-500 transition"
+            />
+            <input
+              type="password"
+              name="newPassword"
+              placeholder="New Password"
+              value={formData.newPassword}
+              onChange={handleChange}
+              required
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3 text-white outline-none focus:border-indigo-500 transition"
+            />
+            <input
+              type="password"
+              name="confirmPassword"
+              placeholder="Confirm Password"
+              value={formData.confirmPassword}
+              onChange={handleChange}
+              required
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 p-3 text-white outline-none focus:border-indigo-500 transition"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 text-white font-medium rounded-xl transition shadow-lg shadow-indigo-600/30 flex items-center space-x-2"
+          >
+            <span>{loading ? "Updating..." : "Update Password"}</span>
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 }
