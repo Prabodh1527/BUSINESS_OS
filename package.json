@@ -18,5 +18,10 @@
   "bugs": {
     "url": "https://github.com/Prabodh1527/BUSINESS_OS/issues"
   },
-  "homepage": "https://github.com/Prabodh1527/BUSINESS_OS#readme"
+  "homepage": "https://github.com/Prabodh1527/BUSINESS_OS#readme",
+  "dependencies": {
+    "html2pdf.js": "^0.14.0",
+    "pdfkit": "^0.19.1",
+    "qrcode.react": "^4.2.0"
+  }
 }

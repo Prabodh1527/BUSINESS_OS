@@ -1,8 +1,71 @@
 import express from "express";
+import mongoose from "mongoose";
 import nodemailer from "nodemailer";
-import Invoice from "../models/invoice.model.js";
+import { protect } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
+
+// Define Invoice Schema
+const invoiceSchema = new mongoose.Schema(
+  {
+    invoiceNumber: { type: String, required: true },
+    customer: {
+      name: { type: String, required: true },
+      email: { type: String },
+      phone: { type: String },
+    },
+    businessType: { type: String, default: "SERVICE" },
+    items: [
+      {
+        inventoryId: { type: mongoose.Schema.Types.ObjectId, ref: "Inventory" },
+        sku: String,
+        name: String,
+        quantity: { type: Number, default: 1 },
+        unitPrice: { type: Number, default: 0 },
+        taxRate: { type: Number, default: 0 },
+        total: { type: Number, default: 0 },
+      },
+    ],
+    subtotal: { type: Number, default: 0 },
+    taxTotal: { type: Number, default: 0 },
+    discountTotal: { type: Number, default: 0 },
+    grandTotal: { type: Number, default: 0 },
+    amountPaid: { type: Number, default: 0 },
+    balanceDue: { type: Number, default: 0 },
+    currency: { type: String, default: "INR" },
+    dueDate: { type: String },
+    notes: { type: String, default: "" },
+    status: {
+      type: String,
+      enum: ["PENDING", "PARTIAL", "PAID", "CANCELLED", "OVERDUE"],
+      default: "PENDING",
+    },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  },
+  { timestamps: true }
+);
+
+// Helper function to bind Invoice model to dynamic tenant database
+const getTenantInvoiceModel = (tenantDb) => {
+  if (!tenantDb) {
+    throw new Error("Tenant database connection missing from request context.");
+  }
+  return tenantDb.models.Invoice || tenantDb.model("Invoice", invoiceSchema);
+};
+
+// Helper function to bind Inventory model to dynamic tenant database
+const getTenantInventoryModel = (tenantDb) => {
+  if (!tenantDb) {
+    throw new Error("Tenant database connection missing from request context.");
+  }
+  const inventorySchema = new mongoose.Schema({
+    sku: String,
+    name: String,
+    unitPrice: Number,
+    stockQuantity: Number,
+  });
+  return tenantDb.models.Inventory || tenantDb.model("Inventory", inventorySchema);
+};
 
 // Helper to create Nodemailer transporter
 const createTransporter = () => {
@@ -25,12 +88,16 @@ const formatDate = (dateString) => {
   return isNaN(date.getTime()) ? dateString : date.toString();
 };
 
+// Protect all billing/invoice routes & inject req.tenantDb
+router.use(protect);
+
 // ==========================================
 // 1. GET ALL INVOICES & DYNAMIC STATS
 // GET http://localhost:5000/api/invoices
 // ==========================================
 router.get("/", async (req, res) => {
   try {
+    const Invoice = getTenantInvoiceModel(req.tenantDb);
     const invoices = await Invoice.find().sort({ createdAt: -1 });
     const totalInvoices = invoices.length;
 
@@ -42,8 +109,7 @@ router.get("/", async (req, res) => {
       const invoiceTotal = Number(inv.grandTotal) || 0;
       const collectedPayment = Number(inv.amountPaid) || 0;
 
-      // Subtract logged payment amount from total revenue
-      totalRevenue += (invoiceTotal - collectedPayment);
+      totalRevenue += invoiceTotal - collectedPayment;
 
       if (inv.status === "PAID") {
         paidCount++;
@@ -61,19 +127,24 @@ router.get("/", async (req, res) => {
         pendingCount,
       },
       invoices,
+      data: invoices,
     });
   } catch (error) {
+    console.error("❌ Error fetching invoices:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 });
 
 // ==========================================
-// 2. CREATE INVOICE & AUTO EMAIL
+// 2. CREATE INVOICE & AUTOMATICALLY DEDUCT STOCK
 // POST http://localhost:5000/api/invoices
 // ==========================================
 router.post("/", async (req, res) => {
   console.log("📥 Incoming Invoice Payload:", req.body);
   try {
+    const Invoice = getTenantInvoiceModel(req.tenantDb);
+    const Inventory = getTenantInventoryModel(req.tenantDb);
+
     const {
       customer,
       businessType,
@@ -84,12 +155,17 @@ router.post("/", async (req, res) => {
       notes,
     } = req.body;
 
-    if (!customer?.name || !items || items.length === 0) {
+    // Handle string or object payload for customer name
+    const customerName = typeof customer === "string" ? customer : customer?.name;
+
+    if (!customerName || !items || items.length === 0) {
       return res.status(400).json({
         success: false,
         message: "Customer name and at least one item are required.",
       });
     }
+
+    const customerObj = typeof customer === "string" ? { name: customer } : customer;
 
     let subtotal = 0;
     let taxTotal = 0;
@@ -112,9 +188,10 @@ router.post("/", async (req, res) => {
     const randomSuffix = Math.floor(10000000 + Math.random() * 90000000);
     const invoiceNumber = `INV-${randomSuffix}`;
 
+    // 1. Create the new Invoice in Tenant DB
     const newInvoice = await Invoice.create({
       invoiceNumber,
-      customer,
+      customer: customerObj,
       businessType: businessType || "SERVICE",
       items: processedItems,
       subtotal,
@@ -127,12 +204,36 @@ router.post("/", async (req, res) => {
       dueDate: dueDate || null,
       notes: notes || "",
       status: "PENDING",
+      userId: req.user?._id,
     });
 
-    console.log("✅ Invoice Saved to Database:", newInvoice._id);
+    // 2. Deduct inventory stock for each line item
+    for (const item of items) {
+      const targetId = item._id || item.inventoryId || item.id;
+      const targetSku = item.sku;
 
-    // Send formatted email
-    if (customer?.email && process.env.SMTP_USER && process.env.SMTP_PASS) {
+      let searchFilter = null;
+      if (targetId && mongoose.Types.ObjectId.isValid(targetId)) {
+        searchFilter = { _id: targetId };
+      } else if (targetSku) {
+        searchFilter = { sku: targetSku };
+      } else if (item.name) {
+        searchFilter = { name: item.name };
+      }
+
+      if (searchFilter) {
+        const qtyToDeduct = Number(item.quantity) || 1;
+        await Inventory.findOneAndUpdate(
+          searchFilter,
+          { $inc: { stockQuantity: -qtyToDeduct } }
+        );
+      }
+    }
+
+    console.log(`✅ Invoice Created & Stock Deducted in Tenant DB (${req.tenantDbName})`);
+
+    // 3. Send automatic email notification if recipient email exists
+    if (customerObj?.email && process.env.SMTP_USER && process.env.SMTP_PASS) {
       try {
         const transporter = createTransporter();
         if (transporter) {
@@ -144,7 +245,7 @@ router.post("/", async (req, res) => {
                 <h2 style="color: #4F46E5; margin: 0 0 5px 0; font-size: 20px; font-weight: bold;">BUSINESS OS</h2>
                 <h3 style="margin: 0 0 20px 0; color: #1e293b; font-size: 16px; font-weight: bold;">New Invoice Statement</h3>
                 
-                <p style="margin: 0 0 15px 0; color: #334155; font-size: 14px;">Dear <strong>${customer.name}</strong> ,</p>
+                <p style="margin: 0 0 15px 0; color: #334155; font-size: 14px;">Dear <strong>${customerObj.name}</strong>,</p>
                 <p style="margin: 0 0 20px 0; color: #334155; font-size: 14px;">A new invoice <strong>#${newInvoice.invoiceNumber}</strong> has been generated for you.</p>
 
                 <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; background-color: #f8fafc; border-radius: 6px; font-size: 14px;">
@@ -175,12 +276,12 @@ router.post("/", async (req, res) => {
 
           await transporter.sendMail({
             from: `"Business OS" <${process.env.SMTP_USER}>`,
-            to: customer.email,
+            to: customerObj.email,
             subject: `New Invoice Generated: #${newInvoice.invoiceNumber}`,
             html: htmlContent,
           });
 
-          console.log("📧 Invoice email sent successfully to:", customer.email);
+          console.log("📧 Invoice email sent successfully to:", customerObj.email);
         }
       } catch (mailErr) {
         console.error("⚠️ Email error:", mailErr.message);
@@ -189,8 +290,9 @@ router.post("/", async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: `Invoice #${newInvoice.invoiceNumber} generated successfully!`,
+      message: `Invoice #${newInvoice.invoiceNumber} generated and stock updated!`,
       invoice: newInvoice,
+      data: newInvoice,
     });
   } catch (error) {
     console.error("❌ Invoice Creation Error:", error);
@@ -204,6 +306,7 @@ router.post("/", async (req, res) => {
 // ==========================================
 router.post("/:id/payment", async (req, res) => {
   try {
+    const Invoice = getTenantInvoiceModel(req.tenantDb);
     const { amount } = req.body;
     const paymentAmount = Number(amount);
 
@@ -213,21 +316,15 @@ router.post("/:id/payment", async (req, res) => {
 
     const invoice = await Invoice.findById(req.params.id);
     if (!invoice) {
-      return res.status(404).json({ success: false, message: "Invoice not found" });
+      return res.status(404).json({ success: false, message: "Invoice not found in tenant database" });
     }
 
-    // Accumulate payment
     const newAmountPaid = (Number(invoice.amountPaid) || 0) + paymentAmount;
     const newBalanceDue = Math.max(0, Number(invoice.grandTotal) - newAmountPaid);
 
     invoice.amountPaid = newAmountPaid;
     invoice.balanceDue = newBalanceDue;
-
-    if (newBalanceDue === 0) {
-      invoice.status = "PAID";
-    } else {
-      invoice.status = "PARTIAL";
-    }
+    invoice.status = newBalanceDue === 0 ? "PAID" : "PARTIAL";
 
     await invoice.save();
 
@@ -237,6 +334,7 @@ router.post("/:id/payment", async (req, res) => {
       success: true,
       message: `Payment of ₹${paymentAmount} recorded successfully!`,
       invoice,
+      data: invoice,
     });
   } catch (error) {
     console.error("❌ Log Payment Error:", error);
@@ -246,26 +344,23 @@ router.post("/:id/payment", async (req, res) => {
 
 // Direct endpoint handler for body-based invoiceId requests
 router.post("/payment", async (req, res) => {
-  const { invoiceId, id, amount } = req.body;
-  const targetId = invoiceId || id;
-
-  if (!targetId) {
-    return res.status(400).json({ success: false, message: "Invoice ID is required" });
-  }
-
-  req.params.id = targetId;
-  req.body.amount = amount;
-  
-  // Forward internally to the main payment handler
   try {
+    const Invoice = getTenantInvoiceModel(req.tenantDb);
+    const { invoiceId, id, amount } = req.body;
+    const targetId = invoiceId || id;
     const paymentAmount = Number(amount);
+
+    if (!targetId) {
+      return res.status(400).json({ success: false, message: "Invoice ID is required" });
+    }
+
     if (!paymentAmount || paymentAmount <= 0) {
       return res.status(400).json({ success: false, message: "Valid payment amount is required" });
     }
 
     const invoice = await Invoice.findById(targetId);
     if (!invoice) {
-      return res.status(404).json({ success: false, message: "Invoice not found" });
+      return res.status(404).json({ success: false, message: "Invoice not found in tenant database" });
     }
 
     const newAmountPaid = (Number(invoice.amountPaid) || 0) + paymentAmount;
@@ -281,6 +376,7 @@ router.post("/payment", async (req, res) => {
       success: true,
       message: `Payment of ₹${paymentAmount} recorded successfully!`,
       invoice,
+      data: invoice,
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -293,11 +389,12 @@ router.post("/payment", async (req, res) => {
 // ==========================================
 router.patch("/:id/status", async (req, res) => {
   try {
+    const Invoice = getTenantInvoiceModel(req.tenantDb);
     const { status } = req.body;
     const invoice = await Invoice.findById(req.params.id);
 
     if (!invoice) {
-      return res.status(404).json({ success: false, message: "Invoice not found" });
+      return res.status(404).json({ success: false, message: "Invoice not found in tenant database" });
     }
 
     invoice.status = status;
@@ -315,6 +412,29 @@ router.patch("/:id/status", async (req, res) => {
       success: true,
       message: `Invoice status updated to ${status}`,
       invoice,
+      data: invoice,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ==========================================
+// 5. DELETE INVOICE
+// DELETE http://localhost:5000/api/invoices/:id
+// ==========================================
+router.delete("/:id", async (req, res) => {
+  try {
+    const Invoice = getTenantInvoiceModel(req.tenantDb);
+    const deletedInvoice = await Invoice.findByIdAndDelete(req.params.id);
+
+    if (!deletedInvoice) {
+      return res.status(404).json({ success: false, message: "Invoice not found in tenant database" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Invoice deleted successfully",
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });

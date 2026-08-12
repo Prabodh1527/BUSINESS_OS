@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import User from '../models/User.js';
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'business_os_super_secret_key';
+const JWT_SECRET = process.env.JWT_SECRET || 'business_os_super_secret_key_2026';
 
 // Middleware to authenticate JWT Token
 const authenticateToken = (req, res, next) => {
@@ -27,13 +27,19 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Helper: Helper function to generate clean tenant database names
+const generateTenantDbName = (identifier) => {
+  const sanitized = identifier.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  return `tenant_${sanitized}_${Date.now()}`;
+};
+
 // ==========================================
 // 1. REGISTER OWNER / WORKSPACE ROUTE
 // POST http://localhost:5000/api/auth/register
 // ==========================================
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, companyName } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({
@@ -53,15 +59,26 @@ router.post('/register', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // Generate isolated database identifier
+    const tenantDbName = generateTenantDbName(companyName || name);
+
     const newUser = await User.create({
       name,
       email,
       password: hashedPassword,
       role: role ? role.toUpperCase() : 'OWNER',
+      tenantDbName,
+      companyName: companyName || `${name}'s Workspace`,
     });
 
     const token = jwt.sign(
-      { userId: newUser._id, role: newUser.role },
+      {
+        userId: newUser._id,
+        id: newUser._id,
+        role: newUser.role,
+        tenantDbName: newUser.tenantDbName,
+        companyId: newUser._id,
+      },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -70,11 +87,13 @@ router.post('/register', async (req, res) => {
       success: true,
       message: 'Workspace created successfully!',
       token,
+      tenantDbName: newUser.tenantDbName,
       user: {
         _id: newUser._id,
         name: newUser.name,
         email: newUser.email,
         role: newUser.role,
+        tenantDbName: newUser.tenantDbName,
       },
     });
   } catch (error) {
@@ -124,8 +143,19 @@ router.post('/login', async (req, res) => {
       });
     }
 
+    // Ensure user has an assigned tenantDbName or fallback based on company context
+    const tenantDbName =
+      user.tenantDbName ||
+      `tenant_${(user.companyId || user._id).toString().toLowerCase()}`;
+
     const token = jwt.sign(
-      { userId: user._id, role: user.role },
+      {
+        userId: user._id,
+        id: user._id,
+        role: user.role,
+        tenantDbName,
+        companyId: user.companyId || user._id,
+      },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -134,11 +164,13 @@ router.post('/login', async (req, res) => {
       success: true,
       message: 'Logged in successfully!',
       token,
+      tenantDbName,
       user: {
         _id: user._id,
         name: user.name,
         email: user.email,
         role: user.role,
+        tenantDbName,
       },
     });
   } catch (error) {
@@ -277,7 +309,7 @@ router.post('/reset-password', async (req, res) => {
 router.put('/update-password', authenticateToken, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
-    const userId = req.user.userId;
+    const userId = req.user.userId || req.user.id;
 
     if (!currentPassword || !newPassword) {
       return res.status(400).json({
@@ -323,7 +355,7 @@ router.put('/update-password', authenticateToken, async (req, res) => {
 // 6. CREATE EMPLOYEE & SEND EMAIL CREDENTIALS
 // POST http://localhost:5000/api/auth/create-employee
 // ==========================================
-router.post('/create-employee', async (req, res) => {
+router.post('/create-employee', authenticateToken, async (req, res) => {
   try {
     const { name, email, designation, phone, salary, status } = req.body;
 
@@ -338,6 +370,11 @@ router.post('/create-employee', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(generatedPassword, salt);
 
+    // Fetch workspace context from creating user or token
+    const creator = await User.findById(req.user.userId || req.user.id);
+    const tenantDbName = creator?.tenantDbName || req.user.tenantDbName;
+    const companyId = creator?.companyId || creator?._id || req.user.companyId;
+
     const newEmployee = await User.create({
       name,
       email,
@@ -346,6 +383,8 @@ router.post('/create-employee', async (req, res) => {
       phone,
       salary,
       status: status || 'Active',
+      tenantDbName,
+      companyId,
     });
 
     if (process.env.SMTP_USER && process.env.SMTP_PASS) {
@@ -392,6 +431,7 @@ router.post('/create-employee', async (req, res) => {
         phone,
         salary,
         status: newEmployee.status,
+        tenantDbName: newEmployee.tenantDbName,
       },
     });
   } catch (error) {

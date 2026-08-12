@@ -1,10 +1,10 @@
-
 import express from 'express';
 import mongoose from 'mongoose';
+import { protect } from '../middleware/auth.middleware.js';
 
 const router = express.Router();
 
-// Define schema directly or import your existing model
+// Define schema directly
 const inventorySchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: false },
@@ -19,30 +19,24 @@ const inventorySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const Inventory = mongoose.models.Inventory || mongoose.model('Inventory', inventorySchema);
-
-// Optional auth extraction middleware
-const extractUser = (req, res, next) => {
-  // If your app attaches user to req.user via JWT middleware, keep it available
-  next();
+// Helper to get or create Model on the dynamic tenant database connection
+const getTenantInventoryModel = (tenantDb) => {
+  if (!tenantDb) {
+    throw new Error('Tenant database connection missing from request context.');
+  }
+  return tenantDb.models.Inventory || tenantDb.model('Inventory', inventorySchema);
 };
 
-// GET /api/inventory - Fetch all items
-router.get('/', extractUser, async (req, res) => {
+// Apply auth middleware to protect all routes and populate req.tenantDb
+router.use(protect);
+
+// GET /api/inventory - Fetch all items from the isolated tenant database
+router.get('/', async (req, res) => {
   try {
-    const filter = {};
-    
-    // If your model filters by owner/userId, apply it conditionally
-    if (req.user && req.user._id) {
-      filter.userId = req.user._id;
-    }
+    const Inventory = getTenantInventoryModel(req.tenantDb);
 
-    let items = await Inventory.find(filter).sort({ createdAt: -1 });
-
-    // Fallback: If user-filtered query returns empty, fetch all items to prevent blank screens
-    if (items.length === 0 && req.user) {
-      items = await Inventory.find({}).sort({ createdAt: -1 });
-    }
+    // Query exclusively within the tenant's isolated database
+    const items = await Inventory.find({}).sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,
@@ -59,9 +53,11 @@ router.get('/', extractUser, async (req, res) => {
   }
 });
 
-// POST /api/inventory - Save new item
-router.post('/', extractUser, async (req, res) => {
+// POST /api/inventory - Save new item in the isolated tenant database
+router.post('/', async (req, res) => {
   try {
+    const Inventory = getTenantInventoryModel(req.tenantDb);
+
     const {
       sku,
       skuCode,
@@ -106,10 +102,16 @@ router.post('/', extractUser, async (req, res) => {
   }
 });
 
-// PUT /api/inventory/:id - Update item
-router.put('/:id', extractUser, async (req, res) => {
+// PUT /api/inventory/:id - Update item in the isolated tenant database
+router.put('/:id', async (req, res) => {
   try {
+    const Inventory = getTenantInventoryModel(req.tenantDb);
     const updated = await Inventory.findByIdAndUpdate(req.params.id, req.body, { new: true });
+
+    if (!updated) {
+      return res.status(404).json({ success: false, message: 'Item not found in workspace' });
+    }
+
     return res.status(200).json({
       success: true,
       inventory: updated,
@@ -120,16 +122,20 @@ router.put('/:id', extractUser, async (req, res) => {
   }
 });
 
-// DELETE /api/inventory/:id - Delete item
-router.delete('/:id', extractUser, async (req, res) => {
+// DELETE /api/inventory/:id - Delete item from the isolated tenant database
+router.delete('/:id', async (req, res) => {
   try {
-    await Inventory.findByIdAndDelete(req.params.id);
-    return res.status(200).json({ success: true, message: 'Item deleted' });
+    const Inventory = getTenantInventoryModel(req.tenantDb);
+    const deleted = await Inventory.findByIdAndDelete(req.params.id);
+
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: 'Item not found in workspace' });
+    }
+
+    return res.status(200).json({ success: true, message: 'Item deleted successfully' });
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
   }
 });
 
 export default router;
-
-

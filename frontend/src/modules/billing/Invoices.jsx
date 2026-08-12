@@ -3,6 +3,7 @@ import { QRCodeSVG } from 'qrcode.react';
 
 export default function Invoices() {
   const [invoices, setInvoices] = useState([]);
+  const [inventoryList, setInventoryList] = useState([]);
   const [stats, setStats] = useState({
     totalInvoices: 0,
     totalRevenue: 0,
@@ -29,27 +30,51 @@ export default function Invoices() {
     paymentMethod: 'UPI',
     upiId: 'merchant@upi',
     dueDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-    items: [{ description: '', quantity: 1, unitPrice: 0, taxRate: 0 }],
+    items: [{ inventoryId: '', description: '', quantity: 1, unitPrice: 0, taxRate: 0 }],
   });
 
   const API_URL = 'http://localhost:5000/api/invoices';
+  const INVENTORY_API = 'http://localhost:5000/api/inventory';
 
-  // Fetch all invoices and summary stats
+  // Helper to retrieve and format Authorization Bearer Token
+  const getAuthHeader = () => {
+    const rawToken = localStorage.getItem('token') || sessionStorage.getItem('token') || '';
+    const cleanToken = rawToken.replace(/^Bearer\s+/i, '').trim();
+    return cleanToken ? { Authorization: `Bearer ${cleanToken}` } : {};
+  };
+
+  // Fetch all invoices and calculate stats (includes totalRevenue fix)
   const fetchInvoices = async () => {
     try {
       setLoading(true);
-      const res = await fetch(API_URL);
+      const res = await fetch(API_URL, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeader(),
+        },
+      });
       const data = await res.json();
-      if (data.success) {
-        setInvoices(data.invoices || []);
-        setStats(
-          data.stats || {
-            totalInvoices: 0,
-            totalRevenue: 0,
-            paidCount: 0,
-            pendingCount: 0,
+      if (data.success || res.ok) {
+        const invoiceList = data.invoices || data.data || [];
+        setInvoices(invoiceList);
+
+        // Compute local revenue as fallback/override if backend returns 0
+        const computedRevenue = invoiceList.reduce((sum, inv) => {
+          if (inv.status === 'PAID') {
+            return sum + (inv.grandTotal || 0);
           }
-        );
+          return sum + (inv.amountPaid || 0);
+        }, 0);
+
+        const paidCount = invoiceList.filter((inv) => inv.status === 'PAID').length;
+        const pendingCount = invoiceList.filter((inv) => inv.status !== 'PAID' && inv.status !== 'CANCELLED').length;
+
+        setStats({
+          totalInvoices: invoiceList.length,
+          totalRevenue: data.stats?.totalRevenue ? data.stats.totalRevenue : computedRevenue,
+          paidCount: data.stats?.paidCount ?? paidCount,
+          pendingCount: data.stats?.pendingCount ?? pendingCount,
+        });
       }
     } catch (err) {
       console.error('Failed to fetch invoices:', err);
@@ -58,37 +83,70 @@ export default function Invoices() {
     }
   };
 
+  // Fetch catalog products from inventory
+  const fetchInventory = async () => {
+    try {
+      const res = await fetch(INVENTORY_API, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeader(),
+        },
+      });
+      const data = await res.json();
+      if (data.success || res.ok) {
+        const rawItems = Array.isArray(data) ? data : data.items || data.inventory || data.data || [];
+        setInventoryList(rawItems);
+      }
+    } catch (err) {
+      console.error('Failed to fetch inventory:', err);
+    }
+  };
+
   useEffect(() => {
     fetchInvoices();
+    fetchInventory();
   }, []);
 
   // -------------------------------------------------------------
   // LINE ITEMS & REAL-TIME CALCULATION HANDLERS
   // -------------------------------------------------------------
   
-  // Update line item state when user edits description, quantity, price, or tax
   const handleItemChange = (index, field, value) => {
     const updatedItems = [...formData.items];
-    updatedItems[index][field] = field === 'description' ? value : Number(value);
+
+    if (field === 'inventoryId') {
+      const selectedProduct = inventoryList.find((prod) => (prod._id || prod.id) === value);
+      if (selectedProduct) {
+        updatedItems[index] = {
+          inventoryId: selectedProduct._id || selectedProduct.id,
+          description: selectedProduct.name || selectedProduct.productName || '',
+          unitPrice: Number(selectedProduct.unitPrice ?? selectedProduct.price ?? 0),
+          quantity: 1,
+          taxRate: Number(selectedProduct.taxRate ?? 0),
+        };
+      } else {
+        updatedItems[index].inventoryId = value;
+      }
+    } else {
+      updatedItems[index][field] = field === 'description' ? value : Number(value);
+    }
+
     setFormData({ ...formData, items: updatedItems });
   };
 
-  // Add a new blank row to line items
   const addItemRow = () => {
     setFormData({
       ...formData,
-      items: [...formData.items, { description: '', quantity: 1, unitPrice: 0, taxRate: 0 }],
+      items: [...formData.items, { inventoryId: '', description: '', quantity: 1, unitPrice: 0, taxRate: 0 }],
     });
   };
 
-  // Remove a row from line items
   const removeItemRow = (index) => {
     if (formData.items.length === 1) return;
     const updatedItems = formData.items.filter((_, i) => i !== index);
     setFormData({ ...formData, items: updatedItems });
   };
 
-  // Real-Time Total Calculation Engine
   const calculateTotals = () => {
     let subtotal = 0;
     let taxTotal = 0;
@@ -106,12 +164,18 @@ export default function Invoices() {
   };
 
   // -------------------------------------------------------------
-  // INVOICE CREATION & PAYMENT HANDLERS
+  // INVOICE CREATION, AUTO-STOCK DEDUCTION & PAYMENT HANDLERS
   // -------------------------------------------------------------
   
   const handleCreateInvoice = async (e) => {
     e.preventDefault();
     try {
+      const authHeaders = getAuthHeader();
+      if (!authHeaders.Authorization) {
+        alert('Not authorized: Token missing. Please log in again.');
+        return;
+      }
+
       const { subtotal, taxTotal, grandTotal } = calculateTotals();
       const payload = {
         customer: {
@@ -123,8 +187,14 @@ export default function Invoices() {
         upiId: formData.upiId,
         dueDate: formData.dueDate,
         items: formData.items.map((item) => ({
-          ...item,
-          total: (item.quantity * item.unitPrice) + ((item.quantity * item.unitPrice * item.taxRate) / 100),
+          inventoryId: item.inventoryId || undefined,
+          _id: item.inventoryId || undefined,
+          name: item.description,
+          description: item.description,
+          quantity: Number(item.quantity) || 1,
+          unitPrice: Number(item.unitPrice) || 0,
+          taxRate: Number(item.taxRate) || 0,
+          total: (item.quantity * item.unitPrice) + ((item.quantity * item.unitPrice * (item.taxRate || 0)) / 100),
         })),
         subtotal,
         taxTotal,
@@ -134,14 +204,38 @@ export default function Invoices() {
         status: 'PENDING',
       };
 
+      // 1. Save Invoice
       const res = await fetch(API_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...authHeaders
+        },
         body: JSON.stringify(payload),
       });
 
       const data = await res.json();
-      if (data.success) {
+      if (res.ok || data.success) {
+        // 2. AUTO-DEDUCT STOCK FROM INVENTORY
+        const itemsToDeduct = formData.items
+          .filter((item) => item.inventoryId)
+          .map((item) => ({
+            inventoryId: item.inventoryId,
+            quantity: Number(item.quantity),
+          }));
+
+        if (itemsToDeduct.length > 0) {
+          await fetch(`${INVENTORY_API}/deduct-stock`, {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json',
+              ...authHeaders
+            },
+            body: JSON.stringify({ items: itemsToDeduct }),
+          });
+        }
+
+        // 3. Reset Form and Refresh State
         setShowModal(false);
         setFormData({
           customerName: '',
@@ -150,14 +244,16 @@ export default function Invoices() {
           paymentMethod: 'UPI',
           upiId: 'merchant@upi',
           dueDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-          items: [{ description: '', quantity: 1, unitPrice: 0, taxRate: 0 }],
+          items: [{ inventoryId: '', description: '', quantity: 1, unitPrice: 0, taxRate: 0 }],
         });
         fetchInvoices();
+        fetchInventory();
       } else {
         alert(data.message || 'Failed to create invoice');
       }
     } catch (err) {
       console.error('Error creating invoice:', err);
+      alert(`Error creating invoice: ${err.message}`);
     }
   };
 
@@ -185,14 +281,16 @@ export default function Invoices() {
     }
 
     try {
-      // Dynamic URL target with fallback body parameter to guarantee backend endpoint match
       const endpoint = targetId 
         ? `${API_URL}/${targetId}/payment`
         : `${API_URL}/payment`;
 
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...getAuthHeader()
+        },
         body: JSON.stringify({
           invoiceId: targetId || invoice.invoiceNumber,
           amount: paymentNum,
@@ -200,7 +298,7 @@ export default function Invoices() {
       });
 
       const data = await res.json();
-      if (res.ok && data.success) {
+      if (res.ok && (data.success || res.status === 200)) {
         setPaymentModal({ open: false, invoice: null, amount: '' });
         fetchInvoices();
       } else {
@@ -208,7 +306,7 @@ export default function Invoices() {
       }
     } catch (err) {
       console.error('Error logging payment:', err);
-      alert('Server connection error. Make sure your backend server is running and the payment endpoint exists.');
+      alert('Server connection error. Make sure your backend server is running and authenticated.');
     }
   };
 
@@ -216,11 +314,14 @@ export default function Invoices() {
     try {
       const res = await fetch(`${API_URL}/${id}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...getAuthHeader()
+        },
         body: JSON.stringify({ status: newStatus }),
       });
       const data = await res.json();
-      if (data.success) {
+      if (data.success || res.ok) {
         fetchInvoices();
       }
     } catch (err) {
@@ -446,7 +547,7 @@ export default function Invoices() {
       {/* Dynamic Multi-Item Invoice Creation Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="bg-[#111827] border border-slate-700 rounded-xl p-6 w-full max-w-2xl shadow-2xl overflow-y-auto max-h-[90vh]">
+          <div className="bg-[#111827] border border-slate-700 rounded-xl p-6 w-full max-w-3xl shadow-2xl overflow-y-auto max-h-[90vh]">
             <div className="flex justify-between items-center mb-5">
               <h2 className="text-xl font-bold text-white">Create Invoice</h2>
               <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-white text-lg">✕</button>
@@ -511,7 +612,7 @@ export default function Invoices() {
                 </div>
               </div>
 
-              {/* DYNAMIC LINE ITEMS SECTION */}
+              {/* DYNAMIC LINE ITEMS SECTION WITH INVENTORY SELECTOR */}
               <div className="pt-2">
                 <div className="flex justify-between items-center mb-2">
                   <label className="text-slate-300 font-bold">Line Items</label>
@@ -526,46 +627,85 @@ export default function Invoices() {
 
                 <div className="space-y-2">
                   {formData.items.map((item, index) => (
-                    <div key={index} className="flex gap-2 items-center bg-[#1A2234] p-2.5 rounded-lg border border-slate-700/50">
-                      <input
-                        type="text"
-                        required
-                        placeholder="Description"
-                        value={item.description}
-                        onChange={(e) => handleItemChange(index, 'description', e.target.value)}
-                        className="flex-1 bg-transparent text-white focus:outline-none"
-                      />
-                      <input
-                        type="number"
-                        min="1"
-                        placeholder="Qty"
-                        value={item.quantity}
-                        onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
-                        className="w-16 bg-[#111827] border border-slate-700 rounded px-2 py-1 text-white text-center"
-                      />
-                      <input
-                        type="number"
-                        placeholder="Price (₹)"
-                        value={item.unitPrice}
-                        onChange={(e) => handleItemChange(index, 'unitPrice', e.target.value)}
-                        className="w-24 bg-[#111827] border border-slate-700 rounded px-2 py-1 text-white text-center"
-                      />
-                      <input
-                        type="number"
-                        placeholder="Tax (%)"
-                        value={item.taxRate}
-                        onChange={(e) => handleItemChange(index, 'taxRate', e.target.value)}
-                        className="w-16 bg-[#111827] border border-slate-700 rounded px-2 py-1 text-white text-center"
-                      />
-                      {formData.items.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeItemRow(index)}
-                          className="text-rose-400 hover:text-rose-300 px-1 font-bold cursor-pointer"
+                    <div key={index} className="grid grid-cols-12 gap-2 items-center bg-[#1A2234] p-2.5 rounded-lg border border-slate-700/50">
+                      {/* Select Product from Catalog */}
+                      <div className="col-span-3">
+                        <select
+                          value={item.inventoryId || ''}
+                          onChange={(e) => handleItemChange(index, 'inventoryId', e.target.value)}
+                          className="w-full bg-[#111827] border border-slate-700 rounded px-2 py-1 text-white text-xs"
                         >
-                          ✕
-                        </button>
-                      )}
+                          <option value="">-- Catalog Item --</option>
+                          {inventoryList.map((prod) => {
+                            const pId = prod._id || prod.id;
+                            const stock = Number(prod.stockQuantity ?? prod.stock ?? 0);
+                            return (
+                              <option key={pId} value={pId} disabled={stock <= 0}>
+                                {prod.name || prod.productName} ({stock} left)
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+
+                      {/* Description */}
+                      <div className="col-span-3">
+                        <input
+                          type="text"
+                          required
+                          placeholder="Description"
+                          value={item.description}
+                          onChange={(e) => handleItemChange(index, 'description', e.target.value)}
+                          className="w-full bg-transparent text-white focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Quantity */}
+                      <div className="col-span-2">
+                        <input
+                          type="number"
+                          min="1"
+                          placeholder="Qty"
+                          value={item.quantity}
+                          onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
+                          className="w-full bg-[#111827] border border-slate-700 rounded px-2 py-1 text-white text-center"
+                        />
+                      </div>
+
+                      {/* Unit Price */}
+                      <div className="col-span-2">
+                        <input
+                          type="number"
+                          placeholder="Price (₹)"
+                          value={item.unitPrice}
+                          onChange={(e) => handleItemChange(index, 'unitPrice', e.target.value)}
+                          className="w-full bg-[#111827] border border-slate-700 rounded px-2 py-1 text-white text-center"
+                        />
+                      </div>
+
+                      {/* Tax Rate */}
+                      <div className="col-span-1">
+                        <input
+                          type="number"
+                          placeholder="Tax (%)"
+                          value={item.taxRate}
+                          onChange={(e) => handleItemChange(index, 'taxRate', e.target.value)}
+                          className="w-full bg-[#111827] border border-slate-700 rounded px-1 py-1 text-white text-center"
+                        />
+                      </div>
+
+                      {/* Delete Row Button */}
+                      <div className="col-span-1 text-center">
+                        {formData.items.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeItemRow(index)}
+                            className="text-rose-400 hover:text-rose-300 font-bold cursor-pointer"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -589,7 +729,7 @@ export default function Invoices() {
                   Cancel
                 </button>
                 <button type="submit" className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-white font-medium transition cursor-pointer">
-                  Generate Invoice
+                  Generate Invoice & Deduct Stock
                 </button>
               </div>
             </form>
@@ -695,7 +835,7 @@ export default function Invoices() {
                 <tbody>
                   {selectedInvoice.items?.map((item, idx) => (
                     <tr key={idx} className="border-b border-slate-100">
-                      <td className="py-3 font-medium text-slate-800">{item.description}</td>
+                      <td className="py-3 font-medium text-slate-800">{item.description || item.name}</td>
                       <td className="py-3 text-center text-slate-600">{item.quantity}</td>
                       <td className="py-3 text-right text-slate-600">₹{item.unitPrice?.toLocaleString('en-IN')}</td>
                       <td className="py-3 text-right font-semibold text-slate-800">

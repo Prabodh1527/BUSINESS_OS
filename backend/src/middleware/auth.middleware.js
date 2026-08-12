@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
+import { getTenantDatabase } from "../config/tenantManager.js";
 
 export const protect = async (req, res, next) => {
   try {
@@ -33,7 +34,7 @@ export const protect = async (req, res, next) => {
       });
     }
 
-    // 5. Fetch user from MongoDB
+    // 5. Fetch user from MongoDB Master DB (or primary connection)
     let user = null;
     try {
       user = await User.findById(userId).select("-password").lean();
@@ -50,6 +51,7 @@ export const protect = async (req, res, next) => {
           email: decoded.email || "",
           role: decoded.role || "OWNER",
           companyId: decoded.companyId || userId,
+          tenantDbName: decoded.tenantDbName,
         };
       } else {
         return res.status(401).json({
@@ -59,7 +61,16 @@ export const protect = async (req, res, next) => {
       }
     }
 
-    // 7. Multi-tenancy context attachment
+    // 7. Extract Tenant Database Identifier
+    const tenantDbName =
+      user.tenantDbName ||
+      decoded.tenantDbName ||
+      `tenant_${(user.companyId || userId).toString()}`;
+
+    // 8. Attach dynamic tenant connection instance
+    req.tenantDb = getTenantDatabase(tenantDbName);
+
+    // 9. Multi-tenancy context attachment
     const userCompanyId =
       user.companyId?.toString() ||
       user.company?.toString() ||
@@ -67,14 +78,14 @@ export const protect = async (req, res, next) => {
       decoded.tenantId ||
       userId.toString();
 
-    // Ensure _id property is available and formatted
     user._id = user._id ? user._id.toString() : userId.toString();
     user.role = user.role || decoded.role || "OWNER";
 
-    // Attach to Request object
+    // Attach user information and multi-tenant keys to Request object
     req.user = user;
     req.companyId = userCompanyId;
     req.tenantId = userCompanyId;
+    req.tenantDbName = tenantDbName;
     req.industry = user.industry || decoded.industry || "General";
 
     return next();

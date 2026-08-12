@@ -16,7 +16,7 @@ import authRoutes from './routes/auth.routes.js';
 import invoiceRoutes from './routes/invoice.routes.js';
 import inventoryRoutes from './routes/inventory.routes.js';
 
-// Connect to MongoDB
+// Connect to Master/Default MongoDB
 connectDB();
 
 const app = express();
@@ -24,14 +24,13 @@ const PORT = process.env.PORT || 5000;
 
 // CORS Middleware Strategy
 const corsOptions = {
-  origin: '*', // Adjust to process.env.CLIENT_URL in production
+  origin: process.env.CLIENT_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
   credentials: true,
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // Enable pre-flight handling for all routes
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

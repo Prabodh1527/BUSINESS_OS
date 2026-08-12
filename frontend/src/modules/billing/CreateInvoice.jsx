@@ -9,15 +9,59 @@ const CreateInvoice = () => {
     },
     businessType: "SERVICE",
     items: [
-      { description: "", quantity: 1, unitPrice: 0, taxRate: 0 }
+      { catalogId: "", description: "", quantity: 1, unitPrice: 0, taxRate: 0 }
     ],
     dueDate: "",
     notes: "",
   });
 
+  const [catalog, setCatalog] = useState([]);
   const [notification, setNotification] = useState({ show: false, message: "", type: "success" });
 
-  // Read stored notification on component mount (persists across redirects/remounts)
+  // Helper to extract JWT safely from storage
+  const getAuthToken = () => {
+    const rawToken = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
+    return rawToken.replace(/^Bearer\s+/i, "").trim();
+  };
+
+  // 1. Fetch Inventory Catalog Items on Mount
+  useEffect(() => {
+    const fetchCatalog = async () => {
+      try {
+        const token = getAuthToken();
+        const res = await fetch("http://localhost:5000/api/inventory", {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: token ? `Bearer ${token}` : "",
+          },
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          const items = Array.isArray(data)
+            ? data
+            : data.inventory || data.data || data.items || [];
+
+          const normalized = items.map((item) => ({
+            id: item._id || item.id,
+            name: item.name || item.productName || item.itemName || "Unnamed Item",
+            sku: item.sku || item.skuCode || "",
+            price: Number(item.unitPrice ?? item.price ?? 0),
+            taxRate: Number(item.taxRate ?? 18),
+            stockQuantity: Number(item.stockQuantity ?? item.stock ?? 0),
+          }));
+
+          setCatalog(normalized);
+        }
+      } catch (error) {
+        console.error("Failed to load inventory catalog into CreateInvoice:", error);
+      }
+    };
+
+    fetchCatalog();
+  }, []);
+
+  // Read stored notification on component mount
   useEffect(() => {
     const storedNotification = sessionStorage.getItem("invoice_notification");
     if (storedNotification) {
@@ -45,6 +89,32 @@ const CreateInvoice = () => {
     }));
   };
 
+  // Handle Dropdown Selection for Inventory Catalog Item
+  const handleCatalogSelect = (index, selectedId) => {
+    const selectedProduct = catalog.find((prod) => prod.id === selectedId);
+
+    const updatedItems = [...formData.items];
+    if (selectedProduct) {
+      updatedItems[index] = {
+        ...updatedItems[index],
+        catalogId: selectedProduct.id,
+        description: selectedProduct.name,
+        unitPrice: selectedProduct.price,
+        taxRate: selectedProduct.taxRate,
+      };
+    } else {
+      updatedItems[index] = {
+        ...updatedItems[index],
+        catalogId: "",
+        description: "",
+        unitPrice: 0,
+        taxRate: 0,
+      };
+    }
+
+    setFormData((prev) => ({ ...prev, items: updatedItems }));
+  };
+
   const handleItemChange = (index, field, value) => {
     const updatedItems = [...formData.items];
     updatedItems[index][field] = value;
@@ -56,7 +126,7 @@ const CreateInvoice = () => {
       ...prev,
       items: [
         ...prev.items,
-        { description: "", quantity: 1, unitPrice: 0, taxRate: 0 },
+        { catalogId: "", description: "", quantity: 1, unitPrice: 0, taxRate: 0 },
       ],
     }));
   };
@@ -72,20 +142,40 @@ const CreateInvoice = () => {
     e.preventDefault();
 
     try {
+      const token = getAuthToken();
+
+      if (!token) {
+        showNotification("Not authorized: No authentication token found. Please log in again.", "error");
+        return;
+      }
+
+      // Map local state fields to backend expected Schema (catalogId -> inventoryId, description -> name)
+      const payload = {
+        ...formData,
+        items: formData.items.map((item) => ({
+          inventoryId: item.catalogId || undefined,
+          _id: item.catalogId || undefined,
+          name: item.description,
+          quantity: Number(item.quantity) || 1,
+          unitPrice: Number(item.unitPrice) || 0,
+          taxRate: Number(item.taxRate) || 0,
+        })),
+      };
+
       const response = await fetch("http://localhost:5000/api/invoices", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(payload),
       });
 
       const data = await response.json();
 
-      if (data.success) {
+      if (response.ok || data.success) {
         const msg = data.message || `Invoice generated successfully for ${formData.customer.name}!`;
-        
-        // Save to session storage so notification shows even if component re-renders
+
         sessionStorage.setItem(
           "invoice_notification",
           JSON.stringify({ message: msg, type: "success" })
@@ -97,12 +187,12 @@ const CreateInvoice = () => {
         setFormData({
           customer: { name: "", email: "", phone: "" },
           businessType: "SERVICE",
-          items: [{ description: "", quantity: 1, unitPrice: 0, taxRate: 0 }],
+          items: [{ catalogId: "", description: "", quantity: 1, unitPrice: 0, taxRate: 0 }],
           dueDate: "",
           notes: "",
         });
       } else {
-        showNotification(`Error: ${data.message}`, "error");
+        showNotification(`Error: ${data.message || "Failed to create invoice"}`, "error");
       }
     } catch (error) {
       showNotification(`Failed to create invoice: ${error.message}`, "error");
@@ -198,6 +288,24 @@ const CreateInvoice = () => {
         <h3>Items</h3>
         {formData.items.map((item, index) => (
           <div key={index} style={{ display: "flex", gap: "10px", marginBottom: "10px" }}>
+            {/* Catalog Item Selection Dropdown */}
+            <select
+              value={item.catalogId || ""}
+              onChange={(e) => handleCatalogSelect(index, e.target.value)}
+              style={{ padding: "8px", flex: 2, background: "#1e293b", border: "1px solid #334155", color: "#fff", borderRadius: "4px" }}
+            >
+              <option value="">-- Catalog Item --</option>
+              {catalog.length === 0 ? (
+                <option disabled>No items available</option>
+              ) : (
+                catalog.map((prod) => (
+                  <option key={prod.id} value={prod.id}>
+                    {prod.name} {prod.sku ? `(${prod.sku})` : ""} - ₹{prod.price}
+                  </option>
+                ))
+              )}
+            </select>
+
             <input
               type="text"
               placeholder="Item Description"
@@ -263,7 +371,7 @@ const CreateInvoice = () => {
           type="submit"
           style={{ background: "#10b981", color: "#fff", border: "none", padding: "10px 20px", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }}
         >
-          Create Invoice
+          Generate Invoice & Deduct Stock
         </button>
       </form>
     </div>

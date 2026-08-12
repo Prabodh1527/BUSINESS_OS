@@ -1,9 +1,14 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, useCallback } from "react";
 import {
   clearAuthStorage,
   completeOnboardingForUser,
   getStoredUser,
 } from "@/services/authService";
+
+const API_BASE =
+  (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) ||
+  (typeof process !== "undefined" && process.env?.REACT_APP_API_URL) ||
+  "http://localhost:5000";
 
 const AuthContext = createContext(null);
 
@@ -12,53 +17,93 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  // Helper to parse JWT and check if it is expired
+  const isTokenExpired = useCallback((jwtToken) => {
+    if (!jwtToken || typeof jwtToken !== "string") return true;
     try {
-      const storedUser = getStoredUser();
-      const storedToken = localStorage.getItem("token");
+      const parts = jwtToken.split(".");
+      if (parts.length !== 3) return true;
 
-      if (storedUser) {
-        setUser(storedUser);
-      }
-      if (storedToken) {
-        setToken(storedToken);
-      }
+      // Safe base64url decoding
+      const base64Url = parts[1];
+      const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+      const jsonPayload = decodeURIComponent(
+        atob(base64)
+          .split("")
+          .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+          .join("")
+      );
+
+      const payload = JSON.parse(jsonPayload);
+      if (!payload.exp) return false;
+
+      // 5-second buffer to prevent clock skew issues
+      return Date.now() >= payload.exp * 1000 - 5000;
     } catch (err) {
-      console.error("Auth state initialization error:", err);
-    } finally {
-      setLoading(false);
+      return true; // Treat malformed tokens as expired
     }
   }, []);
 
-  const persistAuth = (userData, rawToken) => {
-    setUser(userData);
-    setToken(rawToken);
+  const persistAuth = useCallback((userData, rawToken) => {
+    if (userData && rawToken) {
+      setUser(userData);
+      setToken(rawToken);
 
-    if (userData || rawToken) {
-      const tokenToSave =
-        rawToken ||
-        userData?.token ||
-        userData?.user?.token ||
-        localStorage.getItem("token");
-
-      if (tokenToSave) {
-        localStorage.setItem("token", tokenToSave);
-      }
+      localStorage.setItem("token", rawToken);
 
       const fullAuthPayload = {
         ...(typeof userData === "object" ? userData : {}),
-        token: tokenToSave || "",
+        token: rawToken,
       };
       localStorage.setItem("business-os-auth", JSON.stringify(fullAuthPayload));
     } else {
+      setUser(null);
+      setToken(null);
+      clearAuthStorage();
       localStorage.removeItem("business-os-auth");
       localStorage.removeItem("token");
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    try {
+      let storedToken = localStorage.getItem("token");
+      let storedUser = getStoredUser();
+
+      // Attempt parsing fallback user if getStoredUser returned null
+      if (!storedUser) {
+        const rawAuth = localStorage.getItem("business-os-auth");
+        if (rawAuth) {
+          try {
+            const parsed = JSON.parse(rawAuth);
+            storedUser = parsed;
+            if (!storedToken && parsed.token) {
+              storedToken = parsed.token;
+            }
+          } catch (e) {
+            // Invalid local storage JSON fallback ignored
+          }
+        }
+      }
+
+      // Verify token validity on initialization
+      if (storedToken && !isTokenExpired(storedToken)) {
+        setToken(storedToken);
+        if (storedUser) setUser(storedUser);
+      } else {
+        persistAuth(null, null);
+      }
+    } catch (err) {
+      console.error("Auth state initialization error:", err);
+      persistAuth(null, null);
+    } finally {
+      setLoading(false);
+    }
+  }, [isTokenExpired, persistAuth]);
 
   const signIn = async ({ email, password, role = "OWNER" }) => {
     try {
-      const response = await fetch("http://localhost:5000/api/auth/login", {
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, role }),
@@ -75,6 +120,13 @@ export function AuthProvider({ children }) {
 
       const jwtToken = data.token || data.user?.token;
       const userObj = data.user || data;
+
+      if (!jwtToken) {
+        return {
+          success: false,
+          message: "No token returned from backend login response",
+        };
+      }
 
       persistAuth(userObj, jwtToken);
 
@@ -95,7 +147,7 @@ export function AuthProvider({ children }) {
 
   const signUp = async ({ name, email, password, role = "OWNER" }) => {
     try {
-      const response = await fetch("http://localhost:5000/api/auth/register", {
+      const response = await fetch(`${API_BASE}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, email, password, role }),
@@ -112,6 +164,13 @@ export function AuthProvider({ children }) {
 
       const jwtToken = data.token || data.user?.token;
       const userObj = data.user || data;
+
+      if (!jwtToken) {
+        return {
+          success: false,
+          message: "No token returned from backend registration response",
+        };
+      }
 
       persistAuth(userObj, jwtToken);
 
@@ -130,10 +189,9 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const signOut = () => {
-    clearAuthStorage();
+  const signOut = useCallback(() => {
     persistAuth(null, null);
-  };
+  }, [persistAuth]);
 
   const completeOnboarding = () => {
     if (!user) return;
@@ -143,6 +201,13 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const getAuthHeaders = useCallback(() => {
+    return {
+      "Content-Type": "application/json",
+      Authorization: token ? `Bearer ${token}` : "",
+    };
+  }, [token]);
+
   const value = useMemo(
     () => ({
       user,
@@ -151,10 +216,12 @@ export function AuthProvider({ children }) {
       signIn,
       signUp,
       signOut,
+      logout: signOut,
       completeOnboarding,
-      isAuthenticated: Boolean(token || user),
+      getAuthHeaders,
+      isAuthenticated: Boolean(token && !isTokenExpired(token)),
     }),
-    [user, token, loading]
+    [user, token, loading, signOut, completeOnboarding, getAuthHeaders, isTokenExpired]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
