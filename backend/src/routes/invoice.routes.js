@@ -39,8 +39,11 @@ router.get("/", async (req, res) => {
     let pendingCount = 0;
 
     invoices.forEach((inv) => {
-      // Calculate total invoiced revenue dynamically
-      totalRevenue += Number(inv.grandTotal) || 0;
+      const invoiceTotal = Number(inv.grandTotal) || 0;
+      const collectedPayment = Number(inv.amountPaid) || 0;
+
+      // Subtract logged payment amount from total revenue
+      totalRevenue += (invoiceTotal - collectedPayment);
 
       if (inv.status === "PAID") {
         paidCount++;
@@ -53,7 +56,7 @@ router.get("/", async (req, res) => {
       success: true,
       stats: {
         totalInvoices,
-        totalRevenue: Math.round(totalRevenue * 100) / 100,
+        totalRevenue: Math.max(0, Math.round(totalRevenue * 100) / 100),
         paidCount,
         pendingCount,
       },

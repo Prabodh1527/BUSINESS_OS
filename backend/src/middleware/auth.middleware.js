@@ -2,43 +2,96 @@ import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 
 export const protect = async (req, res, next) => {
-  let token;
+  try {
+    let token;
+    const authHeader = req.headers.authorization || req.headers.Authorization;
 
-  if (
-    req.headers.authorization &&
-    req.headers.authorization.startsWith("Bearer")
-  ) {
+    // 1. Check if Authorization header exists and contains "Bearer"
+    if (authHeader && authHeader.toLowerCase().startsWith("bearer")) {
+      token = authHeader.replace(/^Bearer\s+/i, "").trim();
+    }
+
+    // 2. Reject missing or stringified null/undefined tokens
+    if (!token || token === "null" || token === "undefined" || token === "Bearer") {
+      return res.status(401).json({
+        success: false,
+        message: "Not authorized, no valid token provided",
+      });
+    }
+
+    // 3. Verify token signature using .env key with project fallback
+    const secret = process.env.JWT_SECRET || "business_os_super_secret_key_2026";
+    const decoded = jwt.verify(token, secret);
+
+    // 4. Extract standard user identifier claims
+    const userId = decoded.id || decoded._id || decoded.userId;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Not authorized, token payload missing user identifier",
+      });
+    }
+
+    // 5. Fetch user from MongoDB
+    let user = null;
     try {
-      token = req.headers.authorization.split(" ")[1];
+      user = await User.findById(userId).select("-password").lean();
+    } catch (dbErr) {
+      console.error("User database query error in auth middleware:", dbErr.message);
+    }
 
-      const decoded = jwt.verify(
-        token,
-        process.env.JWT_SECRET || "fallback_jwt_secret_key_123"
-      );
-
-      req.user = await User.findById(decoded.id).select("-password");
-
-      if (!req.user) {
+    // 6. Fallback if database query does not return a record
+    if (!user) {
+      if (decoded && (decoded.email || decoded.id || decoded._id)) {
+        user = {
+          _id: userId,
+          id: userId,
+          email: decoded.email || "",
+          role: decoded.role || "OWNER",
+          companyId: decoded.companyId || userId,
+        };
+      } else {
         return res.status(401).json({
           success: false,
           message: "Not authorized, user account not found",
         });
       }
-
-      return next();
-    } catch (error) {
-      console.error("JWT Auth Error:", error.message);
-      return res.status(401).json({
-        success: false,
-        message: "Not authorized, token failed",
-      });
     }
-  }
 
-  if (!token) {
+    // 7. Multi-tenancy context attachment
+    const userCompanyId =
+      user.companyId?.toString() ||
+      user.company?.toString() ||
+      decoded.companyId ||
+      decoded.tenantId ||
+      userId.toString();
+
+    // Ensure _id property is available and formatted
+    user._id = user._id ? user._id.toString() : userId.toString();
+    user.role = user.role || decoded.role || "OWNER";
+
+    // Attach to Request object
+    req.user = user;
+    req.companyId = userCompanyId;
+    req.tenantId = userCompanyId;
+    req.industry = user.industry || decoded.industry || "General";
+
+    return next();
+  } catch (error) {
+    console.error("JWT Auth Middleware Error:", error.message);
+
+    let message = "Not authorized, token failed";
+    if (error.name === "TokenExpiredError") {
+      message = "Token expired, please log in again";
+    } else if (error.name === "JsonWebTokenError") {
+      message = "Invalid token signature";
+    }
+
     return res.status(401).json({
       success: false,
-      message: "Not authorized, no token provided",
+      message,
+      error: error.message,
     });
   }
 };

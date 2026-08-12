@@ -2,11 +2,28 @@ import User from "../models/User.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
-// Helper function to generate JWT token
-const generateToken = (id, role) => {
+// Single secret reference to guarantee consistency across auth generation & middleware
+const JWT_SECRET_KEY = process.env.JWT_SECRET || "business_os_super_secret_key_2026";
+
+// Helper function to generate JWT token with multi-tenant payload support
+const generateToken = (user) => {
+  const userId = user._id || user.id;
+  const companyId =
+    user.companyId?.toString() ||
+    user.company?.toString() ||
+    userId.toString();
+
   return jwt.sign(
-    { id, role },
-    process.env.JWT_SECRET || "fallback_jwt_secret_key_123",
+    {
+      id: userId,
+      _id: userId,
+      email: user.email,
+      role: user.role || "OWNER",
+      companyId: companyId,
+      tenantId: companyId,
+      industry: user.industry || "General",
+    },
+    JWT_SECRET_KEY,
     { expiresIn: "7d" }
   );
 };
@@ -15,7 +32,7 @@ const generateToken = (id, role) => {
 // @route   POST /api/auth/register
 export const register = async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, companyName } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({
@@ -42,9 +59,10 @@ export const register = async (req, res) => {
       email: normalizedEmail,
       password: hashedPassword,
       role: role || "OWNER",
+      companyName: companyName || "",
     });
 
-    const token = generateToken(user._id, user.role);
+    const token = generateToken(user);
     const userObj = user.toObject();
     delete userObj.password;
 
@@ -61,7 +79,7 @@ export const register = async (req, res) => {
     console.error("Register Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Server error during registration.",
+      message: error.message || "Server error during registration.",
     });
   }
 };
@@ -82,7 +100,9 @@ export const login = async (req, res) => {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    const user = await User.findOne({ email: normalizedEmail }).select("+password");
+    const user = await User.findOne({ email: normalizedEmail }).select(
+      "+password"
+    );
 
     if (!user) {
       return res.status(400).json({
@@ -100,7 +120,7 @@ export const login = async (req, res) => {
       });
     }
 
-    const token = generateToken(user._id, user.role);
+    const token = generateToken(user);
 
     const userObj = user.toObject();
     delete userObj.password;
@@ -118,7 +138,7 @@ export const login = async (req, res) => {
     console.error("Login Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Server error during login.",
+      message: error.message || "Server error during login.",
     });
   }
 };
@@ -150,8 +170,7 @@ export const forgotPassword = async (req, res) => {
 
     user.resetOtp = otp;
     user.resetOtpExpire = Date.now() + 10 * 60 * 1000;
-    
-    // Set fallback name if missing to prevent validation errors
+
     if (!user.name) {
       user.name = user.email ? user.email.split("@")[0] : "User";
     }
@@ -271,12 +290,10 @@ export const updatePassword = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
 
-    // Auto-populate name if document legacy record lacks it
     if (!user.name) {
       user.name = user.email ? user.email.split("@")[0] : "User";
     }
 
-    // Save with validateModifiedOnly to ignore legacy un-modified schema fields
     await user.save({ validateModifiedOnly: true });
 
     return res.status(200).json({
