@@ -15,8 +15,10 @@ import connectDB from './config/db.js';
 import authRoutes from './routes/auth.routes.js';
 import invoiceRoutes from './routes/invoice.routes.js';
 import inventoryRoutes from './routes/inventory.routes.js';
+import customerRoutes from './routes/customer.routes.js';
+import analyticsRoutes from './routes/analytics.routes.js';
 
-// Connect to Master/Default MongoDB
+// Connect to Master MongoDB (Single Shared Database)
 connectDB();
 
 const app = express();
@@ -26,7 +28,14 @@ const PORT = process.env.PORT || 5000;
 const corsOptions = {
   origin: process.env.CLIENT_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'x-tenant-id',
+    'x-tenant-db',
+  ],
   credentials: true,
 };
 
@@ -56,15 +65,27 @@ if (process.env.SMTP_USER && process.env.SMTP_PASS) {
   console.warn('⚠️ SMTP credentials missing in .env file');
 }
 
-// Routes Registration
+// ==========================================
+// API ROUTES
+// ==========================================
+
+// Global Auth Routes (Public: Login, Register, Forgot Password)
 app.use('/api/auth', authRoutes);
+
+// Protected Tenant-Scoped Routes (Guarded internally by protect & attachTenantDB)
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/inventory', inventoryRoutes);
+app.use('/api/customers', customerRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 // Health Check Endpoint
 app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Backend server is running!' });
 });
+
+// ==========================================
+// ERROR HANDLERS
+// ==========================================
 
 // 404 Route Handler
 app.use((req, res) => {

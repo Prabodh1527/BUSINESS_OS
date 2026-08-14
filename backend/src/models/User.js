@@ -26,6 +26,18 @@ const userSchema = new mongoose.Schema(
       enum: ["OWNER", "MANAGER", "EMPLOYEE", "ADMIN", "USER"],
       default: "OWNER",
     },
+    // Multi-tenant fields linking the owner in business_os to their DB
+    tenantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Tenant",
+    },
+    tenantDbName: {
+      type: String,
+      required: function () {
+        // Required for business owners/admins who own an isolated database
+        return this.role === "OWNER" || this.role === "ADMIN";
+      },
+    },
     phone: String,
     salary: String,
     status: {
@@ -39,4 +51,5 @@ const userSchema = new mongoose.Schema(
 );
 
 const User = mongoose.models.User || mongoose.model("User", userSchema);
+
 export default User;

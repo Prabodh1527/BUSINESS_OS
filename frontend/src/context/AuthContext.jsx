@@ -17,7 +17,7 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Helper to parse JWT and check if it is expired
+  // Helper to parse JWT and verify expiration
   const isTokenExpired = useCallback((jwtToken) => {
     if (!jwtToken || typeof jwtToken !== "string") return true;
     try {
@@ -37,7 +37,7 @@ export function AuthProvider({ children }) {
       const payload = JSON.parse(jsonPayload);
       if (!payload.exp) return false;
 
-      // 5-second buffer to prevent clock skew issues
+      // 5-second buffer to prevent edge-case timing errors
       return Date.now() >= payload.exp * 1000 - 5000;
     } catch (err) {
       return true; // Treat malformed tokens as expired
@@ -56,12 +56,14 @@ export function AuthProvider({ children }) {
         token: rawToken,
       };
       localStorage.setItem("business-os-auth", JSON.stringify(fullAuthPayload));
+      localStorage.setItem("user", JSON.stringify(userData));
     } else {
       setUser(null);
       setToken(null);
       clearAuthStorage();
       localStorage.removeItem("business-os-auth");
       localStorage.removeItem("token");
+      localStorage.removeItem("user");
     }
   }, []);
 
@@ -100,6 +102,27 @@ export function AuthProvider({ children }) {
       setLoading(false);
     }
   }, [isTokenExpired, persistAuth]);
+
+  // Sync session state across multiple tabs or external clear calls
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if (e.key === "token" || e.key === "business-os-auth") {
+        if (!e.newValue) {
+          setUser(null);
+          setToken(null);
+        } else if (e.key === "token" && e.newValue !== token) {
+          if (!isTokenExpired(e.newValue)) {
+            setToken(e.newValue);
+          } else {
+            persistAuth(null, null);
+          }
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, [token, isTokenExpired, persistAuth]);
 
   const signIn = async ({ email, password, role = "OWNER" }) => {
     try {

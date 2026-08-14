@@ -1,6 +1,8 @@
 import User from "../models/User.js";
+import Tenant from "../models/Tenant.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 
 // Single secret reference to guarantee consistency across auth generation & middleware
 const JWT_SECRET_KEY = process.env.JWT_SECRET || "business_os_super_secret_key_2026";
@@ -11,6 +13,7 @@ const generateToken = (user) => {
   const companyId =
     user.companyId?.toString() ||
     user.company?.toString() ||
+    user.tenantId?.toString() ||
     userId.toString();
 
   return jwt.sign(
@@ -21,6 +24,7 @@ const generateToken = (user) => {
       role: user.role || "OWNER",
       companyId: companyId,
       tenantId: companyId,
+      tenantDbName: user.tenantDbName,
       industry: user.industry || "General",
     },
     JWT_SECRET_KEY,
@@ -28,7 +32,7 @@ const generateToken = (user) => {
   );
 };
 
-// @desc    Register a new user
+// @desc    Register a new user / tenant owner
 // @route   POST /api/auth/register
 export const register = async (req, res) => {
   try {
@@ -54,13 +58,30 @@ export const register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // Generate isolated database name for new tenant
+    const tenantDbName = `tenant_${Date.now()}`;
+    const userRole = role || "OWNER";
+
+    // 1. Initialize Tenant Record in Main DB
+    const tenant = new Tenant({
+      companyName: companyName || `${normalizedEmail.split("@")[0]}'s Org`,
+      dbName: tenantDbName,
+      ownerId: new mongoose.Types.ObjectId(),
+    });
+
+    // 2. Save User inside business_os with tenant linkage
     const user = await User.create({
       name: name || normalizedEmail.split("@")[0],
       email: normalizedEmail,
       password: hashedPassword,
-      role: role || "OWNER",
-      companyName: companyName || "",
+      role: userRole,
+      tenantId: tenant._id,
+      tenantDbName: tenantDbName,
     });
+
+    // Link tenant owner back to user
+    tenant.ownerId = user._id;
+    await tenant.save();
 
     const token = generateToken(user);
     const userObj = user.toObject();

@@ -122,9 +122,14 @@ export default function Login() {
         </button>
       </form>
 
+      {/* Footer Links */}
       <div className="mt-6 flex items-center justify-between text-sm text-slate-400">
         <Link to="/forgot-password" className="hover:text-white">Forgot password?</Link>
-        <Link to="/register" className="hover:text-white">Create account</Link>
+        
+        {/* Only show 'Create account' on OWNER login tab */}
+        {mode === "OWNER" && (
+          <Link to="/register" className="hover:text-white">Create account</Link>
+        )}
       </div>
     </AuthLayout>
   );

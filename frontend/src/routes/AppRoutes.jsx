@@ -95,66 +95,93 @@ import Notifications from "@/modules/notifications/Notifications";
 import Files from "@/modules/files/Files";
 import ProtectedRoute from "./ProtectedRoute";
 
-
+// Smart root redirect supporting case-insensitive role values
 function RootRedirect() {
   const { user } = useAuth();
-  return <Navigate to={user?.role === "EMPLOYEE" ? "/employee/dashboard" : "/dashboard"} replace />;
+  const normalizedRole = user?.role?.toUpperCase();
+  return <Navigate to={normalizedRole === "EMPLOYEE" ? "/employee/dashboard" : "/dashboard"} replace />;
+}
+
+// Guest Guard to prevent logged-in users from hitting /login
+function PublicOnlyRoute({ children }) {
+  const { isAuthenticated, loading, user } = useAuth();
+
+  if (loading) return null;
+  if (isAuthenticated) {
+    const normalizedRole = user?.role?.toUpperCase();
+    return <Navigate to={normalizedRole === "EMPLOYEE" ? "/employee/dashboard" : "/dashboard"} replace />;
+  }
+
+  return children;
 }
 
 export default function AppRoutes() {
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
+      {/* Public Auth Routes */}
+      <Route path="/login" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
+      <Route path="/register" element={<PublicOnlyRoute><Register /></PublicOnlyRoute>} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
 
-      <Route path="/onboarding" element={<Welcome/>}/>
+      {/* Onboarding Routes */}
+      <Route path="/onboarding" element={<Welcome />} />
+      <Route path="/onboarding/business" element={<BusinessInfo />} />
+      <Route path="/onboarding/industry" element={<IndustrySelection />} />
+      <Route path="/onboarding/complete" element={<Complete />} />
 
-      <Route path="/onboarding/business" element={<BusinessInfo/>}/>
-
-      <Route path="/onboarding/industry" element={<IndustrySelection/>}/>
-
-      <Route path="/onboarding/complete" element={<Complete/>}/>
-
-      <Route element={<ProtectedRoute allowedRoles={["OWNER"]}><DashboardLayout /></ProtectedRoute>}>
+      {/* Owner / Management Workspace Routes */}
+      <Route 
+        element={
+          <ProtectedRoute allowedRoles={["OWNER", "ADMIN", "SUPER_ADMIN", "owner", "admin"]}>
+            <DashboardLayout />
+          </ProtectedRoute>
+        }
+      >
         <Route path="/" element={<RootRedirect />} />
         <Route path="/dashboard" element={<Dashboard />} />
 
+        {/* CRM */}
         <Route path="/crm" element={<Customers />} />
         <Route path="/crm/add" element={<AddCustomer />} />
         <Route path="/crm/profile" element={<CustomerProfile />} />
         <Route path="/crm/edit" element={<EditCustomer />} />
 
+        {/* Appointments */}
         <Route path="/appointments" element={<Appointments />} />
         <Route path="/appointments/booking" element={<Booking />} />
         <Route path="/appointments/details" element={<AppointmentDetails />} />
         <Route path="/appointments/calendar" element={<Calendar />} />
 
+        {/* Billing */}
         <Route path="/billing/invoices" element={<Invoices />} />
         <Route path="/billing/invoice/create" element={<CreateInvoice />} />
         <Route path="/billing/invoice-details" element={<InvoiceDetails />} />
         <Route path="/billing/payments" element={<Payments />} />
         <Route path="/billing/expenses" element={<Expenses />} />
 
+        {/* Inventory */}
         <Route path="/inventory" element={<Inventory />} />
         <Route path="/inventory/products" element={<Products />} />
         <Route path="/inventory/purchase-orders" element={<PurchaseOrders />} />
         <Route path="/inventory/suppliers" element={<Suppliers />} />
         <Route path="/inventory/create" element={<CreateProduct />} />
 
+        {/* Employees */}
         <Route path="/employees" element={<Employees />} />
         <Route path="/employees/profile" element={<OwnerEmployeeProfile />} />
         <Route path="/employees/attendance" element={<Attendance />} />
         <Route path="/employees/leaves" element={<Leaves />} />
         <Route path="/employees/payroll" element={<Payroll />} />
 
+        {/* Reports */}
         <Route path="/reports" element={<Reports />} />
         <Route path="/reports/revenue" element={<RevenueReport />} />
         <Route path="/reports/sales" element={<SalesReport />} />
         <Route path="/reports/employees" element={<EmployeeReport />} />
         <Route path="/reports/inventory" element={<InventoryReport />} />
 
+        {/* AI Suite */}
         <Route path="/ai" element={<AIHome />} />
         <Route path="/ai/chat" element={<AIChat />} />
         <Route path="/ai/health" element={<BusinessHealth />} />
@@ -162,6 +189,7 @@ export default function AppRoutes() {
         <Route path="/ai/predictions" element={<Predictions />} />
         <Route path="/ai/recommendations" element={<Recommendations />} />
 
+        {/* Settings */}
         <Route path="/settings" element={<General />} />
         <Route path="/settings/business" element={<Business />} />
         <Route path="/settings/users" element={<Users />} />
@@ -173,13 +201,19 @@ export default function AppRoutes() {
         <Route path="/settings/appearance" element={<Appearance />} />
         <Route path="/settings/masters" element={<Masters />} />
 
+        {/* General App Modules */}
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/files" element={<Files />} />
-
-        
       </Route>
 
-      <Route element={<ProtectedRoute allowedRoles={["EMPLOYEE"]}><DashboardLayout /></ProtectedRoute>}>
+      {/* Employee Portal Routes */}
+      <Route 
+        element={
+          <ProtectedRoute allowedRoles={["EMPLOYEE", "employee"]}>
+            <DashboardLayout />
+          </ProtectedRoute>
+        }
+      >
         <Route path="/employee/dashboard" element={<EmployeeDashboard />} />
         <Route path="/employee/schedule" element={<MySchedule />} />
         <Route path="/employee/attendance" element={<MyAttendance />} />
@@ -190,7 +224,8 @@ export default function AppRoutes() {
         <Route path="/employee/notifications" element={<EmployeeNotifications />} />
       </Route>
 
-      <Route path="*" element={<Navigate to="/login" replace />} />
+      {/* Fallback */}
+      <Route path="*" element={<RootRedirect />} />
     </Routes>
   );
 }

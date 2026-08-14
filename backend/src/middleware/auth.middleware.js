@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
-import { getTenantDatabase } from "../config/tenantManager.js";
+import { getTenantDB } from "../config/db.js";
 
 export const protect = async (req, res, next) => {
   try {
@@ -34,7 +34,7 @@ export const protect = async (req, res, next) => {
       });
     }
 
-    // 5. Fetch user from MongoDB Master DB (or primary connection)
+    // 5. Fetch user from MongoDB Master DB (business_os)
     let user = null;
     try {
       user = await User.findById(userId).select("-password").lean();
@@ -67,8 +67,8 @@ export const protect = async (req, res, next) => {
       decoded.tenantDbName ||
       `tenant_${(user.companyId || userId).toString()}`;
 
-    // 8. Attach dynamic tenant connection instance
-    req.tenantDb = getTenantDatabase(tenantDbName);
+    // 8. Attach dynamic tenant connection instance from config/db.js
+    req.tenantDb = getTenantDB(tenantDbName);
 
     // 9. Multi-tenancy context attachment
     const userCompanyId =
