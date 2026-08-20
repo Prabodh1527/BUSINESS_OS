@@ -1,4 +1,4 @@
-// frontend/src/api/customer.api.js
+// frontend/src/api/crm.api.js
 const API_BASE =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) ||
   "http://localhost:5000";
@@ -39,14 +39,11 @@ export const createCustomer = async (data, token) => {
 
 export const updateCustomer = async (id, data, token) => {
   const response = await fetch(`${API_BASE}/api/customers/${id}`, {
-    method: "PUT",
+    method: "PATCH",
     headers: getHeaders(token),
     body: JSON.stringify(data),
   });
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.message || "Failed to update customer");
-  }
+  if (!response.ok) throw new Error("Failed to update customer");
   return response.json();
 };
 

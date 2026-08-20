@@ -1,51 +1,19 @@
-import express from 'express';
-import mongoose from 'mongoose';
-import { protect } from '../middleware/auth.middleware.js';
+import express from "express";
+import { protect } from "../middleware/auth.middleware.js";
+import { attachTenantDB } from "../middleware/tenant.middleware.js";
+import Customer from "../models/customer.model.js";
 
 const router = express.Router();
 
-// ==========================================
-// MONGOOSE SCHEMA FOR CUSTOMERS
-// ==========================================
-const customerSchema = new mongoose.Schema(
-  {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    name: { type: String, required: true },
-    email: { type: String, trim: true, lowercase: true },
-    phone: { type: String, trim: true },
-    company: { type: String, default: '' },
-    address: {
-      street: { type: String, default: '' },
-      city: { type: String, default: '' },
-      state: { type: String, default: '' },
-      postalCode: { type: String, default: '' },
-      country: { type: String, default: 'India' },
-    },
-    gstin: { type: String, default: '' }, // For tax/compliance
-    notes: { type: String, default: '' },
-  },
-  { timestamps: true }
-);
+// 1. Guard all customer routes
+router.use(protect, attachTenantDB);
 
-// Helper to bind Model to dynamic tenant DB connection
-const getTenantCustomerModel = (tenantDb) => {
-  if (!tenantDb) {
-    throw new Error('Tenant database connection missing from request context.');
-  }
-  return tenantDb.models.Customer || tenantDb.model('Customer', customerSchema);
-};
-
-// Protect all routes
-router.use(protect);
-
-// ==========================================
-// 1. GET ALL CUSTOMERS
-// GET /api/customers
-// ==========================================
-router.get('/', async (req, res) => {
+// 2. GET ALL CUSTOMERS
+router.get("/", async (req, res) => {
   try {
-    const Customer = getTenantCustomerModel(req.tenantDb);
-    const customers = await Customer.find({}).sort({ createdAt: -1 });
+    const customers = await Customer.find({ tenantId: req.tenantId }).sort({
+      createdAt: -1,
+    });
 
     return res.status(200).json({
       success: true,
@@ -54,25 +22,27 @@ router.get('/', async (req, res) => {
       data: customers,
     });
   } catch (error) {
-    console.error('❌ Error fetching customers:', error);
+    console.error("❌ Error fetching customers:", error);
     return res.status(500).json({
       success: false,
-      message: error.message || 'Failed to retrieve customers.',
+      message: error.message || "Failed to retrieve customers.",
     });
   }
 });
 
-// ==========================================
-// 2. GET SINGLE CUSTOMER BY ID
-// GET /api/customers/:id
-// ==========================================
-router.get('/:id', async (req, res) => {
+// 3. GET SINGLE CUSTOMER
+router.get("/:id", async (req, res) => {
   try {
-    const Customer = getTenantCustomerModel(req.tenantDb);
-    const customer = await Customer.findById(req.params.id);
+    const customer = await Customer.findOne({
+      _id: req.params.id,
+      tenantId: req.tenantId,
+    });
 
     if (!customer) {
-      return res.status(404).json({ success: false, message: 'Customer not found' });
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
     }
 
     return res.status(200).json({
@@ -81,94 +51,105 @@ router.get('/:id', async (req, res) => {
       data: customer,
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 });
 
-// ==========================================
-// 3. CREATE NEW CUSTOMER
-// POST /api/customers
-// ==========================================
-router.post('/', async (req, res) => {
+// 4. CREATE NEW CUSTOMER
+router.post("/", async (req, res) => {
   try {
-    const Customer = getTenantCustomerModel(req.tenantDb);
-    const { name, email, phone, company, address, gstin, notes } = req.body;
+    const { name, email, phone, company, address, notes, status } = req.body;
 
     if (!name) {
-      return res.status(400).json({ success: false, message: 'Customer name is required' });
+      return res.status(400).json({
+        success: false,
+        message: "Customer name is required",
+      });
     }
 
     const newCustomer = await Customer.create({
-      userId: req.user?._id || req.user?.id,
+      tenantId: req.tenantId,
       name,
-      email,
-      phone,
-      company,
-      address,
-      gstin,
-      notes,
+      email: email || "",
+      phone: phone || "",
+      company: company || "",
+      address: address || {},
+      notes: notes || "",
+      status: status || "ACTIVE",
     });
 
     return res.status(201).json({
       success: true,
-      message: 'Customer created successfully',
+      message: "Customer created successfully",
       customer: newCustomer,
       data: newCustomer,
     });
   } catch (error) {
-    console.error('❌ Error creating customer:', error);
-    return res.status(400).json({ success: false, message: error.message });
+    console.error("❌ Error creating customer:", error);
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 });
 
-// ==========================================
-// 4. UPDATE CUSTOMER
-// PUT /api/customers/:id
-// ==========================================
-router.put('/:id', async (req, res) => {
+// 5. UPDATE CUSTOMER
+router.put("/:id", async (req, res) => {
   try {
-    const Customer = getTenantCustomerModel(req.tenantDb);
-
-    const updated = await Customer.findByIdAndUpdate(
-      req.params.id,
+    const updated = await Customer.findOneAndUpdate(
+      { _id: req.params.id, tenantId: req.tenantId },
       { $set: req.body },
       { new: true, runValidators: true }
     );
 
     if (!updated) {
-      return res.status(404).json({ success: false, message: 'Customer not found' });
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Customer updated successfully',
+      message: "Customer updated successfully",
       customer: updated,
       data: updated,
     });
   } catch (error) {
-    return res.status(400).json({ success: false, message: error.message });
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 });
 
-// ==========================================
-// 5. DELETE CUSTOMER
-// DELETE /api/customers/:id
-// ==========================================
-router.delete('/:id', async (req, res) => {
+// 6. DELETE CUSTOMER
+router.delete("/:id", async (req, res) => {
   try {
-    const Customer = getTenantCustomerModel(req.tenantDb);
-    const deleted = await Customer.findByIdAndDelete(req.params.id);
+    const deleted = await Customer.findOneAndDelete({
+      _id: req.params.id,
+      tenantId: req.tenantId,
+    });
 
     if (!deleted) {
-      return res.status(404).json({ success: false, message: 'Customer not found' });
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Customer deleted successfully',
+      message: "Customer deleted successfully",
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 });
 

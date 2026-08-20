@@ -1,79 +1,91 @@
-import Invoice from '../models/invoice.model.js';
-import Customer from '../models/customer.model.js';
-import Inventory from '../models/inventory.model.js';
+// backend/src/controllers/analytics.controller.js
+import Invoice from "../models/invoice.model.js";
+import Customer from "../models/customer.model.js";
+import Inventory from "../models/inventory.model.js";
+import Appointment from "../models/appointment.model.js";
 
 export const getDashboardAnalytics = async (req, res) => {
   try {
     const tenantId = req.tenantId;
 
-    // Revenue and Pending Invoices
-    const invoiceStats = await Invoice.aggregate([
-      { $match: { tenantId } },
-      {
-        $group: {
-          _id: null,
-          totalRevenue: {
-            $sum: { $cond: [{ $eq: ['$status', 'Paid'] }, '$totalAmount', 0] },
-          },
-          pendingAmount: {
-            $sum: { $cond: [{ $eq: ['$status', 'Pending'] }, '$totalAmount', 0] },
-          },
-          pendingCount: {
-            $sum: { $cond: [{ $eq: ['$status', 'Pending'] }, 1, 0] },
-          },
-          totalInvoices: { $sum: 1 },
-        },
-      },
-    ]);
+    if (!tenantId) {
+      return res.status(400).json({
+        success: false,
+        message: "Tenant context missing from request.",
+      });
+    }
 
-    const invoiceData = invoiceStats[0] || {
-      totalRevenue: 0,
-      pendingAmount: 0,
-      pendingCount: 0,
-      totalInvoices: 0,
-    };
+    const [invoices, totalCustomers, inventoryItems, appointments] =
+      await Promise.all([
+        Invoice.find({ tenantId }).sort({ createdAt: -1 }),
+        Customer.countDocuments({ tenantId }),
+        Inventory.find({ tenantId }),
+        Appointment.find({ tenantId }),
+      ]);
 
-    // Total Customers
-    const totalCustomers = await Customer.countDocuments({ tenantId });
+    let totalRevenue = 0;
+    let pendingInvoicesAmount = 0;
+    let pendingInvoicesCount = 0;
 
-    // Low Stock Items (quantity <= 10)
-    const LOW_STOCK_THRESHOLD = 10;
-    const lowStockCount = await Inventory.countDocuments({
-      tenantId,
-      $or: [
-        { quantity: { $lte: LOW_STOCK_THRESHOLD } },
-        { stockQuantity: { $lte: LOW_STOCK_THRESHOLD } },
-      ],
+    // Revenue strictly tracked via official Invoices
+    invoices.forEach((inv) => {
+      const grandTotal = Number(inv.grandTotal || 0);
+      const paid = Number(inv.amountPaid || 0);
+      const balance =
+        inv.balanceDue !== undefined ? Number(inv.balanceDue) : grandTotal - paid;
+
+      if (inv.status === "PAID") {
+        totalRevenue += paid > 0 ? paid : grandTotal;
+      } else if (inv.status === "PARTIAL") {
+        totalRevenue += paid;
+      }
+
+      if (
+        inv.status !== "PAID" &&
+        inv.status !== "CANCELLED" &&
+        inv.status !== "REFUNDED"
+      ) {
+        pendingInvoicesCount++;
+        pendingInvoicesAmount += Math.max(0, balance);
+      }
     });
 
-    const lowStockItems = await Inventory.find({
-      tenantId,
-      $or: [
-        { quantity: { $lte: LOW_STOCK_THRESHOLD } },
-        { stockQuantity: { $lte: LOW_STOCK_THRESHOLD } },
-      ],
-    })
-      .limit(5)
-      .sort({ quantity: 1 });
+    const lowStockItems = inventoryItems.filter((item) => {
+      const currentQty = Number(item.quantity ?? item.stockQuantity ?? 0);
+      const threshold = Number(
+        item.minStockThreshold ?? item.lowStockLimit ?? item.reorderLevel ?? 5
+      );
+      return currentQty <= threshold;
+    });
 
     return res.status(200).json({
       success: true,
       data: {
         summary: {
-          totalRevenue: invoiceData.totalRevenue,
-          pendingInvoicesAmount: invoiceData.pendingAmount,
-          pendingInvoicesCount: invoiceData.pendingCount,
+          totalRevenue: Math.max(0, Math.round(totalRevenue * 100) / 100),
+          pendingInvoicesAmount: Math.max(
+            0,
+            Math.round(pendingInvoicesAmount * 100) / 100
+          ),
+          pendingInvoicesCount,
           totalCustomers,
-          lowStockCount,
+          lowStockCount: lowStockItems.length,
+          totalAppointments: appointments.length,
         },
-        lowStockItems,
+        lowStockItems: lowStockItems.map((item) => ({
+          _id: item._id,
+          name: item.name,
+          sku: item.sku,
+          stock: Number(item.quantity ?? item.stockQuantity ?? 0),
+          threshold: Number(item.minStockThreshold ?? item.lowStockLimit ?? 5),
+        })),
       },
     });
   } catch (error) {
-    console.error('❌ Analytics Fetch Error:', error);
+    console.error("❌ Analytics Controller Error:", error);
     return res.status(500).json({
       success: false,
-      message: error.message || 'Failed to calculate dashboard analytics.',
+      message: error.message || "Failed to fetch analytics.",
     });
   }
 };

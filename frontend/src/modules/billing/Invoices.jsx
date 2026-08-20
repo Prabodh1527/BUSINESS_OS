@@ -1,355 +1,158 @@
-import React, { useState, useEffect } from 'react';
-import { QRCodeSVG } from 'qrcode.react';
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { Link } from "react-router-dom";
+import { QRCodeSVG } from "qrcode.react";
+import {
+  Receipt,
+  Plus,
+  Search,
+  Download,
+  IndianRupee,
+  CheckCircle2,
+  Clock,
+  Printer,
+  CreditCard,
+  FileText,
+} from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
+import {
+  fetchInvoices,
+  recordInvoicePayment,
+  updateInvoiceStatus,
+} from "@/api/billing.api";
 
 export default function Invoices() {
+  const { token } = useAuth();
+
   const [invoices, setInvoices] = useState([]);
-  const [inventoryList, setInventoryList] = useState([]);
-  const [stats, setStats] = useState({
-    totalInvoices: 0,
-    totalRevenue: 0,
-    paidCount: 0,
-    pendingCount: 0,
-  });
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [showModal, setShowModal] = useState(false);
+  const [search, setSearch] = useState("");
   const [selectedInvoice, setSelectedInvoice] = useState(null);
 
-  // Partial payment modal state
+  // Payment Modal State
   const [paymentModal, setPaymentModal] = useState({
     open: false,
     invoice: null,
-    amount: '',
+    amount: "",
   });
+  const [submittingPayment, setSubmittingPayment] = useState(false);
 
-  // Dynamic Multi-Item Form State
-  const [formData, setFormData] = useState({
-    customerName: '',
-    customerEmail: '',
-    businessType: 'SERVICE',
-    paymentMethod: 'UPI',
-    upiId: 'merchant@upi',
-    dueDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-    items: [{ inventoryId: '', description: '', quantity: 1, unitPrice: 0, taxRate: 0 }],
-  });
-
-  const API_URL = 'http://localhost:5000/api/invoices';
-  const INVENTORY_API = 'http://localhost:5000/api/inventory';
-
-  // Helper to retrieve and format Authorization Bearer Token
-  const getAuthHeader = () => {
-    const rawToken = localStorage.getItem('token') || sessionStorage.getItem('token') || '';
-    const cleanToken = rawToken.replace(/^Bearer\s+/i, '').trim();
-    return cleanToken ? { Authorization: `Bearer ${cleanToken}` } : {};
-  };
-
-  // Fetch all invoices and calculate stats (includes totalRevenue fix)
-  const fetchInvoices = async () => {
+  const loadInvoices = useCallback(async () => {
     try {
-      setLoading(true);
-      const res = await fetch(API_URL, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeader(),
-        },
-      });
-      const data = await res.json();
-      if (data.success || res.ok) {
-        const invoiceList = data.invoices || data.data || [];
-        setInvoices(invoiceList);
-
-        // Compute local revenue as fallback/override if backend returns 0
-        const computedRevenue = invoiceList.reduce((sum, inv) => {
-          if (inv.status === 'PAID') {
-            return sum + (inv.grandTotal || 0);
-          }
-          return sum + (inv.amountPaid || 0);
-        }, 0);
-
-        const paidCount = invoiceList.filter((inv) => inv.status === 'PAID').length;
-        const pendingCount = invoiceList.filter((inv) => inv.status !== 'PAID' && inv.status !== 'CANCELLED').length;
-
-        setStats({
-          totalInvoices: invoiceList.length,
-          totalRevenue: data.stats?.totalRevenue ? data.stats.totalRevenue : computedRevenue,
-          paidCount: data.stats?.paidCount ?? paidCount,
-          pendingCount: data.stats?.pendingCount ?? pendingCount,
-        });
+      if (token) {
+        const res = await fetchInvoices(token);
+        if (res.success) {
+          setInvoices(res.invoices || res.data || []);
+        }
       }
     } catch (err) {
-      console.error('Failed to fetch invoices:', err);
+      console.error("Failed to load invoices:", err);
     } finally {
       setLoading(false);
     }
-  };
-
-  // Fetch catalog products from inventory
-  const fetchInventory = async () => {
-    try {
-      const res = await fetch(INVENTORY_API, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeader(),
-        },
-      });
-      const data = await res.json();
-      if (data.success || res.ok) {
-        const rawItems = Array.isArray(data) ? data : data.items || data.inventory || data.data || [];
-        setInventoryList(rawItems);
-      }
-    } catch (err) {
-      console.error('Failed to fetch inventory:', err);
-    }
-  };
+  }, [token]);
 
   useEffect(() => {
-    fetchInvoices();
-    fetchInventory();
-  }, []);
+    loadInvoices();
+  }, [loadInvoices]);
 
-  // -------------------------------------------------------------
-  // LINE ITEMS & REAL-TIME CALCULATION HANDLERS
-  // -------------------------------------------------------------
-  
-  const handleItemChange = (index, field, value) => {
-    const updatedItems = [...formData.items];
+  // Aggregated KPI Stats
+  const stats = useMemo(() => {
+    const totalCount = invoices.length;
+    let totalRevenue = 0;
+    let paidCount = 0;
+    let pendingCount = 0;
 
-    if (field === 'inventoryId') {
-      const selectedProduct = inventoryList.find((prod) => (prod._id || prod.id) === value);
-      if (selectedProduct) {
-        updatedItems[index] = {
-          inventoryId: selectedProduct._id || selectedProduct.id,
-          description: selectedProduct.name || selectedProduct.productName || '',
-          unitPrice: Number(selectedProduct.unitPrice ?? selectedProduct.price ?? 0),
-          quantity: 1,
-          taxRate: Number(selectedProduct.taxRate ?? 0),
-        };
-      } else {
-        updatedItems[index].inventoryId = value;
+    invoices.forEach((inv) => {
+      totalRevenue += Number(inv.amountPaid || 0);
+      if (inv.status === "PAID") {
+        paidCount++;
+      } else if (inv.status !== "CANCELLED") {
+        pendingCount++;
       }
-    } else {
-      updatedItems[index][field] = field === 'description' ? value : Number(value);
-    }
-
-    setFormData({ ...formData, items: updatedItems });
-  };
-
-  const addItemRow = () => {
-    setFormData({
-      ...formData,
-      items: [...formData.items, { inventoryId: '', description: '', quantity: 1, unitPrice: 0, taxRate: 0 }],
     });
-  };
 
-  const removeItemRow = (index) => {
-    if (formData.items.length === 1) return;
-    const updatedItems = formData.items.filter((_, i) => i !== index);
-    setFormData({ ...formData, items: updatedItems });
-  };
+    return { totalCount, totalRevenue, paidCount, pendingCount };
+  }, [invoices]);
 
-  const calculateTotals = () => {
-    let subtotal = 0;
-    let taxTotal = 0;
-    formData.items.forEach((item) => {
-      const itemSub = (item.quantity || 0) * (item.unitPrice || 0);
-      const itemTax = (itemSub * (item.taxRate || 0)) / 100;
-      subtotal += itemSub;
-      taxTotal += itemTax;
-    });
-    return { 
-      subtotal, 
-      taxTotal, 
-      grandTotal: subtotal + taxTotal 
-    };
-  };
-
-  // -------------------------------------------------------------
-  // INVOICE CREATION, AUTO-STOCK DEDUCTION & PAYMENT HANDLERS
-  // -------------------------------------------------------------
-  
-  const handleCreateInvoice = async (e) => {
-    e.preventDefault();
-    try {
-      const authHeaders = getAuthHeader();
-      if (!authHeaders.Authorization) {
-        alert('Not authorized: Token missing. Please log in again.');
-        return;
-      }
-
-      const { subtotal, taxTotal, grandTotal } = calculateTotals();
-      const payload = {
-        customer: {
-          name: formData.customerName,
-          email: formData.customerEmail,
-        },
-        businessType: formData.businessType,
-        paymentMethod: formData.paymentMethod,
-        upiId: formData.upiId,
-        dueDate: formData.dueDate,
-        items: formData.items.map((item) => ({
-          inventoryId: item.inventoryId || undefined,
-          _id: item.inventoryId || undefined,
-          name: item.description,
-          description: item.description,
-          quantity: Number(item.quantity) || 1,
-          unitPrice: Number(item.unitPrice) || 0,
-          taxRate: Number(item.taxRate) || 0,
-          total: (item.quantity * item.unitPrice) + ((item.quantity * item.unitPrice * (item.taxRate || 0)) / 100),
-        })),
-        subtotal,
-        taxTotal,
-        grandTotal,
-        amountPaid: 0,
-        balanceDue: grandTotal,
-        status: 'PENDING',
-      };
-
-      // 1. Save Invoice
-      const res = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          ...authHeaders
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-      if (res.ok || data.success) {
-        // 2. AUTO-DEDUCT STOCK FROM INVENTORY
-        const itemsToDeduct = formData.items
-          .filter((item) => item.inventoryId)
-          .map((item) => ({
-            inventoryId: item.inventoryId,
-            quantity: Number(item.quantity),
-          }));
-
-        if (itemsToDeduct.length > 0) {
-          await fetch(`${INVENTORY_API}/deduct-stock`, {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              ...authHeaders
-            },
-            body: JSON.stringify({ items: itemsToDeduct }),
-          });
-        }
-
-        // 3. Reset Form and Refresh State
-        setShowModal(false);
-        setFormData({
-          customerName: '',
-          customerEmail: '',
-          businessType: 'SERVICE',
-          paymentMethod: 'UPI',
-          upiId: 'merchant@upi',
-          dueDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-          items: [{ inventoryId: '', description: '', quantity: 1, unitPrice: 0, taxRate: 0 }],
-        });
-        fetchInvoices();
-        fetchInventory();
-      } else {
-        alert(data.message || 'Failed to create invoice');
-      }
-    } catch (err) {
-      console.error('Error creating invoice:', err);
-      alert(`Error creating invoice: ${err.message}`);
-    }
-  };
-
-  const handleRecordPayment = async (e) => {
-    e.preventDefault();
-
-    if (!paymentModal.invoice) {
-      alert('No invoice selected.');
-      return;
-    }
-
-    const invoice = paymentModal.invoice;
-    const paymentNum = Number(paymentModal.amount);
-    const targetId = invoice._id || invoice.id;
-    const currentBalance = invoice.balanceDue !== undefined ? invoice.balanceDue : invoice.grandTotal;
-
-    if (isNaN(paymentNum) || paymentNum <= 0) {
-      alert('Please enter a valid payment amount greater than 0.');
-      return;
-    }
-
-    if (paymentNum > currentBalance) {
-      alert(`Payment cannot exceed the outstanding balance (₹${currentBalance}).`);
-      return;
-    }
-
-    try {
-      const endpoint = targetId 
-        ? `${API_URL}/${targetId}/payment`
-        : `${API_URL}/payment`;
-
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          ...getAuthHeader()
-        },
-        body: JSON.stringify({
-          invoiceId: targetId || invoice.invoiceNumber,
-          amount: paymentNum,
-        }),
-      });
-
-      const data = await res.json();
-      if (res.ok && (data.success || res.status === 200)) {
-        setPaymentModal({ open: false, invoice: null, amount: '' });
-        fetchInvoices();
-      } else {
-        alert(data.message || 'Failed to update payment on backend.');
-      }
-    } catch (err) {
-      console.error('Error logging payment:', err);
-      alert('Server connection error. Make sure your backend server is running and authenticated.');
-    }
-  };
-
-  const handleStatusChange = async (id, newStatus) => {
-    try {
-      const res = await fetch(`${API_URL}/${id}/status`, {
-        method: 'PATCH',
-        headers: { 
-          'Content-Type': 'application/json',
-          ...getAuthHeader()
-        },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      const data = await res.json();
-      if (data.success || res.ok) {
-        fetchInvoices();
-      }
-    } catch (err) {
-      console.error('Error updating status:', err);
-    }
-  };
-
+  // Status computation for Overdue items
   const getComputedStatus = (inv) => {
-    if (inv.status === 'PAID' || inv.status === 'CANCELLED') {
+    if (inv.status === "PAID" || inv.status === "CANCELLED") {
       return inv.status;
     }
     const today = new Date().toISOString().slice(0, 10);
-    if (inv.dueDate && inv.dueDate.slice(0, 10) < today && (inv.balanceDue > 0 || inv.balanceDue === undefined)) {
-      return 'OVERDUE';
+    if (
+      inv.dueDate &&
+      new Date(inv.dueDate).toISOString().slice(0, 10) < today &&
+      (inv.balanceDue > 0 || inv.balanceDue === undefined)
+    ) {
+      return "OVERDUE";
     }
-    return inv.status || 'PENDING';
+    return inv.status || "PENDING";
   };
 
-  // Export to CSV
-  const exportToExcel = () => {
-    if (invoices.length === 0) return alert('No invoices available to export.');
+  // Handle Recording Payments
+  const handleRecordPayment = async (e) => {
+    e.preventDefault();
+    if (!paymentModal.invoice) return;
 
-    const headers = ['Invoice Number', 'Customer Name', 'Date', 'Due Date', 'Grand Total', 'Amount Paid', 'Balance Due', 'Status'];
+    const amountNum = Number(paymentModal.amount);
+    const balance =
+      paymentModal.invoice.balanceDue !== undefined
+        ? paymentModal.invoice.balanceDue
+        : paymentModal.invoice.grandTotal;
+
+    if (isNaN(amountNum) || amountNum <= 0) {
+      alert("Please enter a valid amount greater than 0.");
+      return;
+    }
+
+    if (amountNum > balance) {
+      alert(`Payment cannot exceed the outstanding balance (₹${balance}).`);
+      return;
+    }
+
+    setSubmittingPayment(true);
+    try {
+      await recordInvoicePayment(paymentModal.invoice._id, amountNum, token);
+      setPaymentModal({ open: false, invoice: null, amount: "" });
+      await loadInvoices();
+    } catch (err) {
+      alert(err.message || "Failed to record payment.");
+    } finally {
+      setSubmittingPayment(false);
+    }
+  };
+
+  // Handle Quick Status Change
+  const handleStatusChange = async (id, newStatus) => {
+    try {
+      await updateInvoiceStatus(id, newStatus, token);
+      await loadInvoices();
+    } catch (err) {
+      alert(err.message || "Failed to update status.");
+    }
+  };
+
+  // Export Table to CSV
+  const exportToCSV = () => {
+    if (invoices.length === 0) return alert("No invoices available to export.");
+
+    const headers = [
+      "Invoice Number",
+      "Customer Name",
+      "Issue Date",
+      "Due Date",
+      "Grand Total",
+      "Amount Paid",
+      "Balance Due",
+      "Status",
+    ];
+
     const rows = invoices.map((inv) => [
       inv.invoiceNumber,
-      `"${inv.customer?.name || ''}"`,
-      `="${inv.createdAt ? inv.createdAt.slice(0, 10) : ''}"`,
-      `="${inv.dueDate ? inv.dueDate.slice(0, 10) : ''}"`,
+      `"${inv.customer?.name || ""}"`,
+      `"${inv.createdAt ? inv.createdAt.slice(0, 10) : ""}"`,
+      `"${inv.dueDate ? inv.dueDate.slice(0, 10) : ""}"`,
       inv.grandTotal,
       inv.amountPaid || 0,
       inv.balanceDue !== undefined ? inv.balanceDue : inv.grandTotal,
@@ -357,27 +160,27 @@ export default function Invoices() {
     ]);
 
     const csvContent =
-      'data:text/csv;charset=utf-8,\uFEFF' +
-      [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
+      "data:text/csv;charset=utf-8,\uFEFF" +
+      [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
 
-    const link = document.createElement('a');
+    const link = document.createElement("a");
     link.href = encodeURI(csvContent);
-    link.download = `Invoices_Export_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `Invoices_${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
   };
 
-  // Download PDF
+  // PDF Export
   const downloadPDF = () => {
-    const element = document.getElementById('printable-invoice');
+    const element = document.getElementById("printable-invoice");
     if (!element) return;
 
     const generate = () => {
       const opt = {
         margin: 0.4,
         filename: `${selectedInvoice.invoiceNumber}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
+        image: { type: "jpeg", quality: 0.98 },
         html2canvas: { scale: 2 },
-        jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+        jsPDF: { unit: "in", format: "letter", orientation: "portrait" },
       };
       window.html2pdf().set(opt).from(element).save();
     };
@@ -385,394 +188,277 @@ export default function Invoices() {
     if (window.html2pdf) {
       generate();
     } else {
-      const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+      const script = document.createElement("script");
+      script.src =
+        "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
       script.onload = generate;
       document.body.appendChild(script);
     }
   };
 
-  const filteredInvoices = invoices.filter((inv) =>
-    inv.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) ||
-    inv.customer?.name?.toLowerCase().includes(search.toLowerCase())
+  const filteredInvoices = invoices.filter(
+    (inv) =>
+      inv.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) ||
+      inv.customer?.name?.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
-    <div className="p-8 text-slate-100 bg-[#0B0F19] min-h-screen font-sans">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-start mb-8">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Invoices</h1>
-          <p className="text-slate-400 text-sm mt-1">
-            Enterprise billing, partial tracking, and dynamic UPI generation.
+          <h1 className="text-3xl font-bold text-white">Invoices & Billing</h1>
+          <p className="mt-1 text-slate-400">
+            Issue invoices, collect UPI payments, and track outstanding balances.
           </p>
         </div>
+
         <div className="flex gap-3">
           <button
-            onClick={exportToExcel}
-            className="bg-[#1A2234] border border-slate-700 hover:bg-slate-800 text-slate-200 px-4 py-2.5 rounded-lg font-medium text-sm transition cursor-pointer"
+            onClick={exportToCSV}
+            className="flex items-center gap-2 rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 transition"
           >
-            Export CSV
+            <Download size={16} /> Export CSV
           </button>
-          <button
-            onClick={() => setShowModal(true)}
-            className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-lg font-medium text-sm transition shadow-lg shadow-indigo-600/20 flex items-center gap-2 cursor-pointer"
+
+          <Link
+            to="/billing/create"
+            className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-500 transition text-sm"
           >
-            <span className="text-lg leading-none">+</span> New Invoice
-          </button>
+            <Plus size={18} /> Create Invoice
+          </Link>
         </div>
       </div>
 
       {/* KPI Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
-        <div className="bg-[#111827] p-5 rounded-xl border border-slate-800 shadow-sm">
-          <p className="text-slate-400 text-xs font-medium">Total Invoices</p>
-          <h2 className="text-2xl font-bold text-white mt-1">{stats.totalInvoices}</h2>
-        </div>
-        <div className="bg-[#111827] p-5 rounded-xl border border-slate-800 shadow-sm">
-          <p className="text-slate-400 text-xs font-medium">Total Revenue</p>
-          <h2 className="text-2xl font-bold text-emerald-400 mt-1">
-            ₹{stats.totalRevenue?.toLocaleString('en-IN')}
-          </h2>
-        </div>
-        <div className="bg-[#111827] p-5 rounded-xl border border-slate-800 shadow-sm">
-          <p className="text-slate-400 text-xs font-medium">Paid Invoices</p>
-          <h2 className="text-2xl font-bold text-blue-400 mt-1">{stats.paidCount}</h2>
-        </div>
-        <div className="bg-[#111827] p-5 rounded-xl border border-slate-800 shadow-sm">
-          <p className="text-slate-400 text-xs font-medium">Pending / Overdue</p>
-          <h2 className="text-2xl font-bold text-amber-400 mt-1">{stats.pendingCount}</h2>
-        </div>
-      </div>
-
-      {/* Search Bar */}
-      <div className="bg-[#111827] p-4 rounded-xl border border-slate-800 mb-6">
-        <input
-          type="text"
-          placeholder="Search invoices by ID or customer..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full md:w-96 bg-[#1A2234] border border-slate-700 px-4 py-2 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
-        />
-      </div>
-
-      {/* Table */}
-      <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden shadow-sm">
-        {loading ? (
-          <div className="p-12 text-center text-slate-400 text-sm">Loading invoices...</div>
-        ) : filteredInvoices.length === 0 ? (
-          <div className="p-12 text-center text-slate-400 text-sm">No invoices found.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs md:text-sm">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400 bg-[#161F32]">
-                  <th className="py-3.5 px-5 font-semibold">Invoice</th>
-                  <th className="py-3.5 px-5 font-semibold">Customer</th>
-                  <th className="py-3.5 px-5 font-semibold">Due Date</th>
-                  <th className="py-3.5 px-5 font-semibold">Grand Total</th>
-                  <th className="py-3.5 px-5 font-semibold">Balance Due</th>
-                  <th className="py-3.5 px-5 font-semibold">Status</th>
-                  <th className="py-3.5 px-5 font-semibold text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800">
-                {filteredInvoices.map((inv) => {
-                  const status = getComputedStatus(inv);
-                  const balanceDue = inv.balanceDue !== undefined ? inv.balanceDue : inv.grandTotal;
-
-                  return (
-                    <tr key={inv._id || inv.id} className="hover:bg-slate-800/40 transition">
-                      <td className="py-4 px-5 font-medium text-indigo-400">{inv.invoiceNumber}</td>
-                      <td className="py-4 px-5 text-slate-200 font-medium">{inv.customer?.name || 'N/A'}</td>
-                      <td className="py-4 px-5 text-slate-400">
-                        {inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('en-GB') : 'N/A'}
-                      </td>
-                      <td className="py-4 px-5 font-semibold text-slate-100">
-                        ₹{inv.grandTotal?.toLocaleString('en-IN')}
-                      </td>
-                      <td className="py-4 px-5 font-semibold text-amber-400">
-                        ₹{balanceDue?.toLocaleString('en-IN')}
-                      </td>
-
-                      {/* Status Dropdown */}
-                      <td className="py-4 px-5">
-                        <select
-                          value={status}
-                          onChange={(e) => handleStatusChange(inv._id || inv.id, e.target.value)}
-                          className={`px-2.5 py-1 rounded text-xs font-bold border focus:outline-none cursor-pointer transition ${
-                            status === 'PAID'
-                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                              : status === 'OVERDUE'
-                              ? 'bg-rose-500/10 text-rose-400 border-rose-500/20 animate-pulse'
-                              : status === 'PARTIAL'
-                              ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                              : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                          }`}
-                        >
-                          <option value="PENDING" className="bg-[#111827] text-amber-400">PENDING</option>
-                          <option value="PARTIAL" className="bg-[#111827] text-blue-400">PARTIAL</option>
-                          <option value="PAID" className="bg-[#111827] text-emerald-400">PAID</option>
-                          <option value="OVERDUE" className="bg-[#111827] text-rose-400">OVERDUE</option>
-                          <option value="CANCELLED" className="bg-[#111827] text-slate-400">CANCELLED</option>
-                        </select>
-                      </td>
-
-                      {/* Action Buttons */}
-                      <td className="py-4 px-5 text-right flex justify-end gap-2">
-                        {balanceDue > 0 && status !== 'CANCELLED' && (
-                          <button
-                            onClick={() => setPaymentModal({ open: true, invoice: inv, amount: balanceDue })}
-                            className="bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 px-2.5 py-1 rounded text-xs border border-emerald-500/30 transition cursor-pointer"
-                          >
-                            Log Payment
-                          </button>
-                        )}
-                        <button
-                          onClick={() => setSelectedInvoice(inv)}
-                          className="bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 px-3 py-1 rounded text-xs border border-indigo-500/30 transition cursor-pointer"
-                        >
-                          PDF Preview
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      <div className="grid gap-4 md:grid-cols-4">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+          <div className="flex items-center justify-between">
+            <div className="rounded-xl bg-indigo-500/10 p-3 text-indigo-400">
+              <Receipt size={20} />
+            </div>
+            <span className="text-xs text-slate-400">Issued</span>
           </div>
+          <h2 className="mt-4 text-2xl font-bold text-white">{stats.totalCount}</h2>
+          <p className="text-sm text-slate-400">Total Invoices</p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+          <div className="flex items-center justify-between">
+            <div className="rounded-xl bg-emerald-500/10 p-3 text-emerald-400">
+              <IndianRupee size={20} />
+            </div>
+            <span className="text-xs text-emerald-400">Received</span>
+          </div>
+          <h2 className="mt-4 text-2xl font-bold text-emerald-400">
+            ₹{stats.totalRevenue.toLocaleString("en-IN")}
+          </h2>
+          <p className="text-sm text-slate-400">Collected Revenue</p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+          <div className="flex items-center justify-between">
+            <div className="rounded-xl bg-blue-500/10 p-3 text-blue-400">
+              <CheckCircle2 size={20} />
+            </div>
+            <span className="text-xs text-blue-400">Settled</span>
+          </div>
+          <h2 className="mt-4 text-2xl font-bold text-white">{stats.paidCount}</h2>
+          <p className="text-sm text-slate-400">Paid Invoices</p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+          <div className="flex items-center justify-between">
+            <div className="rounded-xl bg-amber-500/10 p-3 text-amber-400">
+              <Clock size={20} />
+            </div>
+            <span className="text-xs text-amber-400">Receivable</span>
+          </div>
+          <h2 className="mt-4 text-2xl font-bold text-white">{stats.pendingCount}</h2>
+          <p className="text-sm text-slate-400">Pending / Overdue</p>
+        </div>
+      </div>
+
+      {/* Search Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-4">
+        <div className="relative w-full max-w-md">
+          <Search size={18} className="absolute left-3 top-3 text-slate-500" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by invoice number or customer name..."
+            className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2.5 pl-10 pr-4 text-white outline-none focus:border-indigo-500 text-sm"
+          />
+        </div>
+      </div>
+
+      {/* Invoices Table */}
+      <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
+        {loading ? (
+          <div className="p-12 text-center text-slate-400">Loading invoices...</div>
+        ) : filteredInvoices.length === 0 ? (
+          <div className="flex flex-col items-center justify-center p-12 text-center">
+            <FileText size={36} className="mb-3 text-slate-600" />
+            <h3 className="text-lg font-semibold text-white">No invoices found</h3>
+            <p className="mt-1 max-w-sm text-sm text-slate-400">
+              {search
+                ? "No invoice matches your search filter."
+                : "You haven't generated any invoices yet."}
+            </p>
+            {!search && (
+              <Link
+                to="/billing/create"
+                className="mt-5 flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+              >
+                <Plus size={16} /> Create Your First Invoice
+              </Link>
+            )}
+          </div>
+        ) : (
+          <table className="w-full">
+            <thead className="border-b border-slate-800 bg-slate-800/40 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              <tr>
+                <th className="p-4">Invoice #</th>
+                <th>Customer</th>
+                <th>Due Date</th>
+                <th>Grand Total</th>
+                <th>Balance Due</th>
+                <th>Status</th>
+                <th className="text-right p-4">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800 text-sm">
+              {filteredInvoices.map((inv) => {
+                const status = getComputedStatus(inv);
+                const balanceDue =
+                  inv.balanceDue !== undefined ? inv.balanceDue : inv.grandTotal;
+
+                return (
+                  <tr key={inv._id} className="hover:bg-slate-800/30 transition">
+                    <td className="p-4 font-mono font-medium text-indigo-400">
+                      {inv.invoiceNumber}
+                    </td>
+                    <td className="font-medium text-white">
+                      {inv.customer?.name || "—"}
+                    </td>
+                    <td className="text-slate-400 text-xs">
+                      {inv.dueDate
+                        ? new Date(inv.dueDate).toLocaleDateString("en-IN")
+                        : "—"}
+                    </td>
+                    <td className="font-semibold text-white">
+                      ₹{inv.grandTotal?.toLocaleString("en-IN")}
+                    </td>
+                    <td className="font-semibold text-amber-400">
+                      ₹{balanceDue?.toLocaleString("en-IN")}
+                    </td>
+                    <td>
+                      <select
+                        value={status}
+                        onChange={(e) => handleStatusChange(inv._id, e.target.value)}
+                        className={`rounded-full px-3 py-1 text-xs font-semibold border outline-none cursor-pointer ${
+                          status === "PAID"
+                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                            : status === "OVERDUE"
+                            ? "bg-rose-500/10 text-rose-400 border-rose-500/20 animate-pulse"
+                            : status === "PARTIAL"
+                            ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                            : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                        }`}
+                      >
+                        <option value="PENDING" className="bg-slate-900 text-amber-400">
+                          PENDING
+                        </option>
+                        <option value="PARTIAL" className="bg-slate-900 text-blue-400">
+                          PARTIAL
+                        </option>
+                        <option value="PAID" className="bg-slate-900 text-emerald-400">
+                          PAID
+                        </option>
+                        <option value="OVERDUE" className="bg-slate-900 text-rose-400">
+                          OVERDUE
+                        </option>
+                        <option value="CANCELLED" className="bg-slate-900 text-slate-400">
+                          CANCELLED
+                        </option>
+                      </select>
+                    </td>
+                    <td className="p-4 text-right space-x-2">
+                      {balanceDue > 0 && status !== "CANCELLED" && (
+                        <button
+                          onClick={() =>
+                            setPaymentModal({
+                              open: true,
+                              invoice: inv,
+                              amount: balanceDue,
+                            })
+                          }
+                          className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 transition"
+                        >
+                          Log Payment
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setSelectedInvoice(inv)}
+                        className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1 text-xs font-medium text-indigo-400 hover:bg-indigo-500/20 transition"
+                      >
+                        PDF Preview
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </div>
 
-      {/* Dynamic Multi-Item Invoice Creation Modal */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="bg-[#111827] border border-slate-700 rounded-xl p-6 w-full max-w-3xl shadow-2xl overflow-y-auto max-h-[90vh]">
-            <div className="flex justify-between items-center mb-5">
-              <h2 className="text-xl font-bold text-white">Create Invoice</h2>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-white text-lg">✕</button>
-            </div>
-
-            <form onSubmit={handleCreateInvoice} className="space-y-4 text-xs md:text-sm">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-400 mb-1">Customer Name</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. DIPTI"
-                    value={formData.customerName}
-                    onChange={(e) => setFormData({ ...formData, customerName: e.target.value })}
-                    className="w-full bg-[#1A2234] border border-slate-700 rounded-lg p-2.5 text-white focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-400 mb-1">Customer Email</label>
-                  <input
-                    type="email"
-                    placeholder="email@example.com"
-                    value={formData.customerEmail}
-                    onChange={(e) => setFormData({ ...formData, customerEmail: e.target.value })}
-                    className="w-full bg-[#1A2234] border border-slate-700 rounded-lg p-2.5 text-white focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-slate-400 mb-1">Payment Method</label>
-                  <select
-                    value={formData.paymentMethod}
-                    onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })}
-                    className="w-full bg-[#1A2234] border border-slate-700 rounded-lg p-2.5 text-white"
-                  >
-                    <option value="UPI">UPI Quick Pay</option>
-                    <option value="BANK_TRANSFER">Bank Transfer</option>
-                    <option value="CASH">Cash</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-slate-400 mb-1">Merchant UPI ID</label>
-                  <input
-                    type="text"
-                    value={formData.upiId}
-                    onChange={(e) => setFormData({ ...formData, upiId: e.target.value })}
-                    className="w-full bg-[#1A2234] border border-slate-700 rounded-lg p-2.5 text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-400 mb-1">Payment Due Date</label>
-                  <input
-                    type="date"
-                    required
-                    value={formData.dueDate}
-                    onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
-                    className="w-full bg-[#1A2234] border border-slate-700 rounded-lg p-2.5 text-white"
-                  />
-                </div>
-              </div>
-
-              {/* DYNAMIC LINE ITEMS SECTION WITH INVENTORY SELECTOR */}
-              <div className="pt-2">
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-slate-300 font-bold">Line Items</label>
-                  <button
-                    type="button"
-                    onClick={addItemRow}
-                    className="text-xs text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer"
-                  >
-                    + Add Item
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  {formData.items.map((item, index) => (
-                    <div key={index} className="grid grid-cols-12 gap-2 items-center bg-[#1A2234] p-2.5 rounded-lg border border-slate-700/50">
-                      {/* Select Product from Catalog */}
-                      <div className="col-span-3">
-                        <select
-                          value={item.inventoryId || ''}
-                          onChange={(e) => handleItemChange(index, 'inventoryId', e.target.value)}
-                          className="w-full bg-[#111827] border border-slate-700 rounded px-2 py-1 text-white text-xs"
-                        >
-                          <option value="">-- Catalog Item --</option>
-                          {inventoryList.map((prod) => {
-                            const pId = prod._id || prod.id;
-                            const stock = Number(prod.stockQuantity ?? prod.stock ?? 0);
-                            return (
-                              <option key={pId} value={pId} disabled={stock <= 0}>
-                                {prod.name || prod.productName} ({stock} left)
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </div>
-
-                      {/* Description */}
-                      <div className="col-span-3">
-                        <input
-                          type="text"
-                          required
-                          placeholder="Description"
-                          value={item.description}
-                          onChange={(e) => handleItemChange(index, 'description', e.target.value)}
-                          className="w-full bg-transparent text-white focus:outline-none"
-                        />
-                      </div>
-
-                      {/* Quantity */}
-                      <div className="col-span-2">
-                        <input
-                          type="number"
-                          min="1"
-                          placeholder="Qty"
-                          value={item.quantity}
-                          onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
-                          className="w-full bg-[#111827] border border-slate-700 rounded px-2 py-1 text-white text-center"
-                        />
-                      </div>
-
-                      {/* Unit Price */}
-                      <div className="col-span-2">
-                        <input
-                          type="number"
-                          placeholder="Price (₹)"
-                          value={item.unitPrice}
-                          onChange={(e) => handleItemChange(index, 'unitPrice', e.target.value)}
-                          className="w-full bg-[#111827] border border-slate-700 rounded px-2 py-1 text-white text-center"
-                        />
-                      </div>
-
-                      {/* Tax Rate */}
-                      <div className="col-span-1">
-                        <input
-                          type="number"
-                          placeholder="Tax (%)"
-                          value={item.taxRate}
-                          onChange={(e) => handleItemChange(index, 'taxRate', e.target.value)}
-                          className="w-full bg-[#111827] border border-slate-700 rounded px-1 py-1 text-white text-center"
-                        />
-                      </div>
-
-                      {/* Delete Row Button */}
-                      <div className="col-span-1 text-center">
-                        {formData.items.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => removeItemRow(index)}
-                            className="text-rose-400 hover:text-rose-300 font-bold cursor-pointer"
-                          >
-                            ✕
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* REAL-TIME CALCULATED TOTALS */}
-              <div className="bg-[#161F32] p-3 rounded-lg text-right space-y-1 text-xs">
-                <p className="text-slate-400">Subtotal: ₹{calculateTotals().subtotal.toLocaleString('en-IN')}</p>
-                <p className="text-slate-400">Tax Total: ₹{calculateTotals().taxTotal.toLocaleString('en-IN')}</p>
-                <p className="text-base font-bold text-emerald-400">
-                  Grand Total: ₹{calculateTotals().grandTotal.toLocaleString('en-IN')}
-                </p>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="px-4 py-2 bg-slate-800 rounded-lg text-slate-300 hover:bg-slate-700 transition"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-white font-medium transition cursor-pointer">
-                  Generate Invoice & Deduct Stock
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Partial Payment Modal */}
+      {/* Partial / Full Payment Modal */}
       {paymentModal.open && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="bg-[#111827] border border-slate-700 rounded-xl p-6 w-full max-w-md shadow-2xl">
-            <h3 className="text-lg font-bold text-white mb-2">Record Payment</h3>
-            <p className="text-xs text-slate-400 mb-4">
-              Invoice #{paymentModal.invoice?.invoiceNumber} — Outstanding Balance: ₹
-              {(paymentModal.invoice?.balanceDue ?? paymentModal.invoice?.grandTotal)?.toLocaleString('en-IN')}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl">
+            <h3 className="text-lg font-bold text-white">Record Invoice Payment</h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Invoice #{paymentModal.invoice?.invoiceNumber} — Outstanding: ₹
+              {(
+                paymentModal.invoice?.balanceDue ?? paymentModal.invoice?.grandTotal
+              )?.toLocaleString("en-IN")}
             </p>
 
-            <form onSubmit={handleRecordPayment} className="space-y-4">
+            <form onSubmit={handleRecordPayment} className="mt-4 space-y-4">
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Payment Amount (₹)</label>
+                <label className="mb-1 block text-xs text-slate-400">
+                  Payment Amount (₹)
+                </label>
                 <input
                   type="number"
                   step="any"
+                  min="1"
                   required
                   value={paymentModal.amount}
-                  onChange={(e) => setPaymentModal({ ...paymentModal, amount: e.target.value })}
-                  className="w-full bg-[#1A2234] border border-slate-700 rounded-lg p-2.5 text-white font-bold focus:outline-none focus:border-indigo-500"
+                  onChange={(e) =>
+                    setPaymentModal({ ...paymentModal, amount: e.target.value })
+                  }
+                  className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-2.5 text-white font-bold outline-none focus:border-indigo-500 text-sm"
                 />
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setPaymentModal({ open: false, invoice: null, amount: '' })}
-                  className="px-4 py-2 bg-slate-800 rounded-lg text-xs text-slate-300 hover:bg-slate-700 transition"
+                  onClick={() =>
+                    setPaymentModal({ open: false, invoice: null, amount: "" })
+                  }
+                  className="rounded-xl border border-slate-700 px-4 py-2 text-xs text-slate-300 hover:bg-slate-800"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs text-white font-bold transition cursor-pointer"
+                  disabled={submittingPayment}
+                  className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
                 >
-                  Save Payment
+                  {submittingPayment ? "Saving..." : "Save Payment"}
                 </button>
               </div>
             </form>
@@ -782,48 +468,69 @@ export default function Invoices() {
 
       {/* PDF View Modal with Dynamic UPI QR Code */}
       {selectedInvoice && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="bg-slate-900 border border-slate-700 rounded-xl max-w-2xl w-full p-6 text-slate-800 overflow-y-auto max-h-[90vh]">
-            <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
               <h3 className="text-lg font-bold text-white">Invoice Preview</h3>
               <div className="flex gap-2">
                 <button
                   onClick={downloadPDF}
-                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-1.5 rounded text-sm font-medium transition cursor-pointer"
+                  className="rounded-xl bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 transition"
                 >
                   Download PDF
                 </button>
-                <button onClick={() => setSelectedInvoice(null)} className="text-slate-400 hover:text-white px-3 py-1 cursor-pointer">
+                <button
+                  onClick={() => setSelectedInvoice(null)}
+                  className="rounded-xl border border-slate-700 px-3 py-1.5 text-xs text-slate-400 hover:text-white"
+                >
                   ✕
                 </button>
               </div>
             </div>
 
-            <div id="printable-invoice" className="bg-white p-8 rounded-lg text-slate-800 shadow-md border border-slate-200">
-              <div className="flex justify-between items-start mb-8 border-b pb-4">
+            <div
+              id="printable-invoice"
+              className="rounded-2xl bg-white p-8 text-slate-800 shadow-md border border-slate-200"
+            >
+              <div className="flex justify-between items-start border-b border-slate-200 pb-4 mb-6">
                 <div>
                   <h2 className="text-2xl font-bold text-indigo-600">BUSINESS OS</h2>
-                  <p className="text-xs text-slate-500">Official Invoice Document</p>
+                  <p className="text-xs text-slate-500">Official Tax Invoice</p>
                 </div>
                 <div className="text-right">
-                  <h3 className="text-xl font-bold text-slate-800">{selectedInvoice.invoiceNumber}</h3>
+                  <h3 className="text-lg font-bold text-slate-800">
+                    {selectedInvoice.invoiceNumber}
+                  </h3>
                   <p className="text-xs text-slate-500">
-                    Date: {selectedInvoice.createdAt ? selectedInvoice.createdAt.slice(0, 10) : 'N/A'}
+                    Date:{" "}
+                    {selectedInvoice.createdAt
+                      ? selectedInvoice.createdAt.slice(0, 10)
+                      : "N/A"}
                   </p>
                   <p className="text-xs font-semibold text-rose-600">
-                    Due Date: {selectedInvoice.dueDate ? selectedInvoice.dueDate.slice(0, 10) : 'N/A'}
+                    Due:{" "}
+                    {selectedInvoice.dueDate
+                      ? selectedInvoice.dueDate.slice(0, 10)
+                      : "N/A"}
                   </p>
                 </div>
               </div>
 
-              <div className="mb-8">
-                <p className="text-xs text-slate-400 font-bold uppercase mb-1">Billed To</p>
-                <p className="text-base font-bold text-slate-800">{selectedInvoice.customer?.name || 'Customer'}</p>
-                {selectedInvoice.customer?.email && <p className="text-sm text-slate-600">{selectedInvoice.customer.email}</p>}
+              <div className="mb-6">
+                <p className="text-xs font-bold uppercase text-slate-400 mb-1">
+                  Billed To
+                </p>
+                <p className="text-base font-bold text-slate-800">
+                  {selectedInvoice.customer?.name}
+                </p>
+                {selectedInvoice.customer?.email && (
+                  <p className="text-xs text-slate-600">
+                    {selectedInvoice.customer.email}
+                  </p>
+                )}
               </div>
 
-              {/* Items Table */}
-              <table className="w-full text-left text-sm mb-6 border-collapse">
+              <table className="w-full text-left text-xs mb-6 border-collapse">
                 <thead>
                   <tr className="border-b-2 border-slate-300 text-slate-600">
                     <th className="py-2">Description</th>
@@ -835,59 +542,74 @@ export default function Invoices() {
                 <tbody>
                   {selectedInvoice.items?.map((item, idx) => (
                     <tr key={idx} className="border-b border-slate-100">
-                      <td className="py-3 font-medium text-slate-800">{item.description || item.name}</td>
-                      <td className="py-3 text-center text-slate-600">{item.quantity}</td>
-                      <td className="py-3 text-right text-slate-600">₹{item.unitPrice?.toLocaleString('en-IN')}</td>
-                      <td className="py-3 text-right font-semibold text-slate-800">
-                        ₹{(item.total || item.quantity * item.unitPrice)?.toLocaleString('en-IN')}
+                      <td className="py-2.5 font-medium text-slate-800">
+                        {item.name || item.description}
+                      </td>
+                      <td className="py-2.5 text-center text-slate-600">
+                        {item.quantity}
+                      </td>
+                      <td className="py-2.5 text-right text-slate-600">
+                        ₹{Number(item.unitPrice || 0).toLocaleString("en-IN")}
+                      </td>
+                      <td className="py-2.5 text-right font-semibold text-slate-800">
+                        ₹
+                        {(
+                          item.total || item.quantity * item.unitPrice
+                        )?.toLocaleString("en-IN")}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
 
-              {/* Bottom Section: QR Code Payment & Balance Due Summary */}
-              <div className="flex justify-between items-end pt-4 border-t border-slate-200">
-                {/* Dynamic UPI Payment QR Code */}
-                <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+              <div className="flex justify-between items-end border-t border-slate-200 pt-4">
+                <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <QRCodeSVG
-                    value={`upi://pay?pa=${selectedInvoice.upiId || 'merchant@upi'}&pn=${encodeURIComponent(
-                      selectedInvoice.customer?.name || 'Business'
-                    )}&am=${selectedInvoice.balanceDue !== undefined ? selectedInvoice.balanceDue : selectedInvoice.grandTotal}&cu=INR`}
-                    size={80}
+                    value={`upi://pay?pa=${
+                      selectedInvoice.upiId || "merchant@upi"
+                    }&pn=${encodeURIComponent(
+                      selectedInvoice.customer?.name || "Merchant"
+                    )}&am=${
+                      selectedInvoice.balanceDue !== undefined
+                        ? selectedInvoice.balanceDue
+                        : selectedInvoice.grandTotal
+                    }&cu=INR`}
+                    size={75}
                   />
                   <div className="text-xs">
-                    <p className="font-bold text-slate-800">Scan & Pay via UPI</p>
-                    <p className="text-slate-500">UPI ID: {selectedInvoice.upiId || 'merchant@upi'}</p>
-                    <p className="text-emerald-600 font-semibold mt-1">Instant Payment</p>
+                    <p className="font-bold text-slate-800">Scan & Pay (UPI)</p>
+                    <p className="text-slate-500">
+                      ID: {selectedInvoice.upiId || "merchant@upi"}
+                    </p>
                   </div>
                 </div>
 
-                <div className="w-56 text-right space-y-1">
-                  <div className="flex justify-between text-xs text-slate-500">
+                <div className="w-52 text-right space-y-1 text-xs">
+                  <div className="flex justify-between text-slate-500">
                     <span>Subtotal:</span>
-                    <span>₹{selectedInvoice.subtotal?.toLocaleString('en-IN')}</span>
+                    <span>₹{selectedInvoice.subtotal?.toLocaleString("en-IN")}</span>
                   </div>
-                  <div className="flex justify-between text-xs text-slate-500">
-                    <span>Tax Total:</span>
-                    <span>₹{selectedInvoice.taxTotal?.toLocaleString('en-IN')}</span>
+                  <div className="flex justify-between text-slate-500">
+                    <span>Tax:</span>
+                    <span>₹{selectedInvoice.taxTotal?.toLocaleString("en-IN")}</span>
                   </div>
-                  <div className="flex justify-between text-sm font-bold text-slate-800 pt-1 border-t">
+                  <div className="flex justify-between font-bold text-slate-800 border-t pt-1">
                     <span>Grand Total:</span>
-                    <span>₹{selectedInvoice.grandTotal?.toLocaleString('en-IN')}</span>
+                    <span>₹{selectedInvoice.grandTotal?.toLocaleString("en-IN")}</span>
                   </div>
-                  <div className="flex justify-between text-xs text-emerald-600 font-medium">
+                  <div className="flex justify-between text-emerald-600 font-medium">
                     <span>Amount Paid:</span>
-                    <span>₹{(selectedInvoice.amountPaid || 0).toLocaleString('en-IN')}</span>
+                    <span>₹{(selectedInvoice.amountPaid || 0).toLocaleString("en-IN")}</span>
                   </div>
-                  <div className="flex justify-between text-sm font-bold text-amber-600 pt-1 border-t">
+                  <div className="flex justify-between font-bold text-amber-600 border-t pt-1">
                     <span>Balance Due:</span>
                     <span>
                       ₹
-                      {(selectedInvoice.balanceDue !== undefined
-                        ? selectedInvoice.balanceDue
-                        : selectedInvoice.grandTotal
-                      )?.toLocaleString('en-IN')}
+                      {(
+                        selectedInvoice.balanceDue !== undefined
+                          ? selectedInvoice.balanceDue
+                          : selectedInvoice.grandTotal
+                      )?.toLocaleString("en-IN")}
                     </span>
                   </div>
                 </div>

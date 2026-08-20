@@ -23,16 +23,13 @@ const customerSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
-    address: {
-      street: { type: String, default: "" },
-      city: { type: String, default: "" },
-      state: { type: String, default: "" },
-      zipCode: { type: String, default: "" },
-      country: { type: String, default: "" },
-    },
-    companyName: {
+    company: {
       type: String,
       default: "",
+    },
+    address: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
     },
     notes: {
       type: String,
@@ -40,14 +37,16 @@ const customerSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["ACTIVE", "INACTIVE"],
+      enum: ["ACTIVE", "INACTIVE", "VIP"],
       default: "ACTIVE",
     },
   },
   { timestamps: true }
 );
 
-// Compound index to speed up customer lookups within a specific tenant
 customerSchema.index({ tenantId: 1, email: 1 });
 
-export default mongoose.model("Customer", customerSchema);
+const Customer =
+  mongoose.models.Customer || mongoose.model("Customer", customerSchema);
+
+export default Customer;

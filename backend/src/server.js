@@ -17,6 +17,8 @@ import invoiceRoutes from './routes/invoice.routes.js';
 import inventoryRoutes from './routes/inventory.routes.js';
 import customerRoutes from './routes/customer.routes.js';
 import analyticsRoutes from './routes/analytics.routes.js';
+import appointmentRoutes from './routes/appointment.routes.js';
+import employeeRoutes from './routes/employee.routes.js';
 
 // Connect to Master MongoDB (Single Shared Database)
 connectDB();
@@ -77,6 +79,8 @@ app.use('/api/invoices', invoiceRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/appointments', appointmentRoutes);
+app.use('/api/employees', employeeRoutes);
 
 // Health Check Endpoint
 app.get('/api/health', (req, res) => {

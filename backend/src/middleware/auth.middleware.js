@@ -1,107 +1,71 @@
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
-import { getTenantDB } from "../config/db.js";
 
 export const protect = async (req, res, next) => {
   try {
     let token;
     const authHeader = req.headers.authorization || req.headers.Authorization;
 
-    // 1. Check if Authorization header exists and contains "Bearer"
+    // 1. Extract Bearer token
     if (authHeader && authHeader.toLowerCase().startsWith("bearer")) {
       token = authHeader.replace(/^Bearer\s+/i, "").trim();
     }
 
-    // 2. Reject missing or stringified null/undefined tokens
-    if (!token || token === "null" || token === "undefined" || token === "Bearer") {
+    if (!token || token === "null" || token === "undefined") {
       return res.status(401).json({
         success: false,
         message: "Not authorized, no valid token provided",
       });
     }
 
-    // 3. Verify token signature using .env key with project fallback
+    // 2. Verify token
     const secret = process.env.JWT_SECRET || "business_os_super_secret_key_2026";
     const decoded = jwt.verify(token, secret);
-
-    // 4. Extract standard user identifier claims
     const userId = decoded.id || decoded._id || decoded.userId;
 
     if (!userId) {
       return res.status(401).json({
         success: false,
-        message: "Not authorized, token payload missing user identifier",
+        message: "Not authorized, token missing user identifier",
       });
     }
 
-    // 5. Fetch user from MongoDB Master DB (business_os)
+    // 3. Fetch user record
     let user = null;
     try {
       user = await User.findById(userId).select("-password").lean();
     } catch (dbErr) {
-      console.error("User database query error in auth middleware:", dbErr.message);
+      console.error("User query error in auth middleware:", dbErr.message);
     }
 
-    // 6. Fallback if database query does not return a record
     if (!user) {
-      if (decoded && (decoded.email || decoded.id || decoded._id)) {
-        user = {
-          _id: userId,
-          id: userId,
-          email: decoded.email || "",
-          role: decoded.role || "OWNER",
-          companyId: decoded.companyId || userId,
-          tenantDbName: decoded.tenantDbName,
-        };
-      } else {
-        return res.status(401).json({
-          success: false,
-          message: "Not authorized, user account not found",
-        });
-      }
+      user = {
+        _id: userId,
+        id: userId,
+        email: decoded.email || "",
+        role: decoded.role || "OWNER",
+        companyId: decoded.companyId || userId,
+      };
     }
 
-    // 7. Extract Tenant Database Identifier
-    const tenantDbName =
-      user.tenantDbName ||
-      decoded.tenantDbName ||
-      `tenant_${(user.companyId || userId).toString()}`;
-
-    // 8. Attach dynamic tenant connection instance from config/db.js
-    req.tenantDb = getTenantDB(tenantDbName);
-
-    // 9. Multi-tenancy context attachment
-    const userCompanyId =
+    // 4. Resolve workspace / tenant ID
+    const companyId =
+      user.tenantId?.toString() ||
       user.companyId?.toString() ||
-      user.company?.toString() ||
-      decoded.companyId ||
-      decoded.tenantId ||
+      decoded.companyId?.toString() ||
+      decoded.tenantId?.toString() ||
       userId.toString();
 
-    user._id = user._id ? user._id.toString() : userId.toString();
-    user.role = user.role || decoded.role || "OWNER";
-
-    // Attach user information and multi-tenant keys to Request object
     req.user = user;
-    req.companyId = userCompanyId;
-    req.tenantId = userCompanyId;
-    req.tenantDbName = tenantDbName;
-    req.industry = user.industry || decoded.industry || "General";
+    req.tenantId = companyId;
+    req.companyId = companyId;
 
     return next();
   } catch (error) {
     console.error("JWT Auth Middleware Error:", error.message);
-
-    let message = "Not authorized, token failed";
-    if (error.name === "TokenExpiredError") {
-      message = "Token expired, please log in again";
-    } else if (error.name === "JsonWebTokenError") {
-      message = "Invalid token signature";
-    }
-
     return res.status(401).json({
       success: false,
-      message,
+      message: "Not authorized, token invalid or expired",
       error: error.message,
     });
   }

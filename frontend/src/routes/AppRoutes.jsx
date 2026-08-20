@@ -155,6 +155,7 @@ export default function AppRoutes() {
 
         {/* Billing */}
         <Route path="/billing/invoices" element={<Invoices />} />
+        <Route path="/billing/create" element={<CreateInvoice />} />
         <Route path="/billing/invoice/create" element={<CreateInvoice />} />
         <Route path="/billing/invoice-details" element={<InvoiceDetails />} />
         <Route path="/billing/payments" element={<Payments />} />

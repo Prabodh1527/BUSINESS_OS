@@ -16,12 +16,4 @@ const connectDB = async () => {
   }
 };
 
-// Function to dynamically switch to a tenant's database
-export const getTenantDB = (tenantDbName) => {
-  if (!mongoose.connection.readyState) {
-    throw new Error("Main database connection is not initialized yet.");
-  }
-  return mongoose.connection.useDb(tenantDbName, { useCache: true });
-};
-
 export default connectDB;

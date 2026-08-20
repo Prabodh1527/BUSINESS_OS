@@ -1,56 +1,102 @@
+// frontend/src/modules/dashboard/Dashboard.jsx
+import { useEffect, useState } from "react";
 import {
-  ArrowUpRight,
   Brain,
   CalendarDays,
-  DollarSign,
+  IndianRupee,
   Users,
+  AlertTriangle,
+  Clock,
 } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
+import { fetchDashboardAnalytics } from "@/api/analytics.api";
 
 import RevenueChart from "@/components/charts/RevenueChart";
-
 import NotificationPanel from "@/components/dashboard/NotificationPanel";
 import RecentActivity from "@/components/dashboard/RecentActivity";
 import BusinessHealthCard from "@/components/dashboard/BusinessHealthCard";
 import AIInsights from "@/components/dashboard/AIInsights";
 import InventoryAlerts from "@/components/dashboard/InventoryAlerts";
 
-const stats = [
-  {
-    title: "Revenue",
-    value: "₹12.8L",
-    change: "+18%",
-    icon: DollarSign,
-  },
-  {
-    title: "Customers",
-    value: "2,486",
-    change: "+8%",
-    icon: Users,
-  },
-  {
-    title: "Appointments",
-    value: "324",
-    change: "+12%",
-    icon: CalendarDays,
-  },
-  {
-    title: "Profit",
-    value: "₹3.2L",
-    change: "+21%",
-    icon: ArrowUpRight,
-  },
-];
-
 export default function Dashboard() {
+  const { token, user } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [analytics, setAnalytics] = useState({
+    summary: {
+      totalRevenue: 0,
+      pendingInvoicesAmount: 0,
+      pendingInvoicesCount: 0,
+      totalCustomers: 0,
+      lowStockCount: 0,
+    },
+    lowStockItems: [],
+  });
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadData() {
+      try {
+        if (token) {
+          const res = await fetchDashboardAnalytics(token);
+          if (res.success && isMounted) {
+            setAnalytics(res.data);
+          }
+        }
+      } catch (err) {
+        console.error("Dashboard data load error:", err);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    }
+
+    loadData();
+    return () => {
+      isMounted = false;
+    };
+  }, [token]);
+
+  const { summary, lowStockItems } = analytics;
+  const isFreshWorkspace =
+    summary.totalRevenue === 0 &&
+    summary.totalCustomers === 0 &&
+    summary.lowStockCount === 0;
+
+  const stats = [
+    {
+      title: "Collected Revenue",
+      value: `₹${summary.totalRevenue.toLocaleString("en-IN")}`,
+      change: summary.totalRevenue > 0 ? "Live" : "No sales yet",
+      icon: IndianRupee,
+    },
+    {
+      title: "Total Customers",
+      value: summary.totalCustomers.toString(),
+      change: summary.totalCustomers > 0 ? "Active" : "0 customers",
+      icon: Users,
+    },
+    {
+      title: "Pending Invoices",
+      value: `₹${summary.pendingInvoicesAmount.toLocaleString("en-IN")}`,
+      change: `${summary.pendingInvoicesCount} unpaid`,
+      icon: Clock,
+    },
+    {
+      title: "Low Stock Alerts",
+      value: summary.lowStockCount.toString(),
+      change: summary.lowStockCount > 0 ? "Restock needed" : "Healthy",
+      icon: AlertTriangle,
+    },
+  ];
+
   return (
     <div className="space-y-5">
       {/* HERO */}
-
       <section className="rounded-3xl border border-slate-800 bg-gradient-to-r from-slate-900 via-slate-900 to-indigo-950 px-8 py-6">
         <div className="flex items-center justify-between">
           <div className="max-w-3xl">
             <p className="text-sm text-slate-400">
-              Welcome back 👋
+              Welcome back, {user?.name || "Owner"} 👋
             </p>
 
             <h1 className="mt-2 text-3xl font-bold text-white">
@@ -58,30 +104,23 @@ export default function Dashboard() {
             </h1>
 
             <p className="mt-3 text-sm leading-6 text-slate-400">
-              Revenue increased by 18% this month. AI recommends following up with
-              8 customers and restocking 3 inventory items.
+              {isFreshWorkspace
+                ? "Your workspace is active. Create your first invoice or add customers to see real-time performance analytics."
+                : `Tracking ${summary.totalCustomers} customers and ₹${summary.totalRevenue.toLocaleString("en-IN")} in settled revenue.`}
             </p>
           </div>
 
           <div className="rounded-2xl border border-indigo-500/30 bg-indigo-500/10 px-8 py-5 text-center">
-            <Brain
-              size={28}
-              className="mx-auto text-indigo-400"
-            />
-
+            <Brain size={28} className="mx-auto text-indigo-400" />
             <h2 className="mt-3 text-4xl font-bold text-white">
-              94
+              {isFreshWorkspace ? "—" : "85"}
             </h2>
-
-            <p className="text-xs text-slate-400">
-              Health Score
-            </p>
+            <p className="text-xs text-slate-400">Health Score</p>
           </div>
         </div>
       </section>
 
-      {/* KPI */}
-
+      {/* DYNAMIC KPI STATS */}
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {stats.map((item) => {
           const Icon = item.icon;
@@ -93,50 +132,42 @@ export default function Dashboard() {
             >
               <div className="flex items-center justify-between">
                 <div className="rounded-xl bg-slate-800 p-2.5">
-                  <Icon size={20} />
+                  <Icon size={20} className="text-indigo-400" />
                 </div>
 
-                <span className="text-sm font-medium text-emerald-400">
+                <span className="text-xs font-medium text-slate-400">
                   {item.change}
                 </span>
               </div>
 
               <h2 className="mt-6 text-2xl font-bold text-white">
-                {item.value}
+                {loading ? "..." : item.value}
               </h2>
 
-              <p className="mt-1 text-sm text-slate-400">
-                {item.title}
-              </p>
+              <p className="mt-1 text-sm text-slate-400">{item.title}</p>
             </div>
           );
         })}
       </section>
 
-      {/* CHART */}
-
+      {/* CHART & NOTIFICATIONS */}
       <section className="grid gap-4 xl:grid-cols-3">
         <div className="xl:col-span-2">
-          <RevenueChart />
+          <RevenueChart totalRevenue={summary.totalRevenue} />
         </div>
-
-        <NotificationPanel />
+        <NotificationPanel lowStockCount={summary.lowStockCount} />
       </section>
 
-      {/* AI */}
-
+      {/* AI & HEALTH */}
       <section className="grid gap-4 xl:grid-cols-2">
-        <BusinessHealthCard />
-
-        <AIInsights />
+        <BusinessHealthCard summary={summary} isFresh={isFreshWorkspace} />
+        <AIInsights summary={summary} isFresh={isFreshWorkspace} />
       </section>
 
       {/* BOTTOM */}
-
       <section className="grid gap-4 xl:grid-cols-2">
         <RecentActivity />
-
-        <InventoryAlerts />
+        <InventoryAlerts items={lowStockItems} />
       </section>
     </div>
   );
